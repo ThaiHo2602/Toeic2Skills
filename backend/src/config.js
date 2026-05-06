@@ -9,6 +9,7 @@ export const config = {
     .filter(Boolean),
   cookieName: process.env.SESSION_COOKIE_NAME ?? "toeic2skills_session",
   cookieSecret: process.env.COOKIE_SECRET ?? "dev-only-change-me",
+  publicBaseUrl: process.env.BACKEND_PUBLIC_URL ?? `http://127.0.0.1:${Number(process.env.PORT ?? 8000)}`,
   isProduction: process.env.NODE_ENV === "production",
   mysql: {
     host: process.env.MYSQL_HOST ?? "127.0.0.1",

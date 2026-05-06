@@ -218,8 +218,8 @@ INSERT INTO plans (
 -- Password1 for learner@example.com
 -- Admin1234 for admin@example.com
 INSERT INTO users (id, name, email, password_hash, role, target_score, created_at, updated_at) VALUES
-('11111111-1111-4111-8111-111111111111', 'Demo Learner', 'learner@example.com', '$2a$12$IVeV76My2J4mUJlQBP46e.hgiG2vY9iPGkKnu9j/0InqSWGtK9eVm', 'user', 650, NOW(), NOW()),
-('22222222-2222-4222-8222-222222222222', 'Admin', 'admin@example.com', '$2a$12$6pWtUDpBb6POibIuBkn35up7gsuBCME7lQhZnx0mJvDiwEbk.w8fi', 'admin', 900, NOW(), NOW());
+('11111111-1111-4111-8111-111111111111', 'Demo Learner', 'learner@example.com', '$2a$12$ye3mEmLQCAruFYCPegvc3OaO0iXfI6f0LdHgfuknl.12IB0KvkVle', 'user', 650, NOW(), NOW()),
+('22222222-2222-4222-8222-222222222222', 'Admin', 'admin@example.com', '$2a$12$FFsjIbDG/M5BLi4ShpWUl./w04aFkvf.bhy3zz9OheIWRk3ZtDzJe', 'admin', 900, NOW(), NOW());
 
 INSERT INTO questions (
   id, skill, part, question_type, question_text, passage_text, transcript, audio_url, image_url,

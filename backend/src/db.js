@@ -420,12 +420,23 @@ async function seedDatabase() {
 
 async function seedUser(name, email, password, role, targetScore) {
   const existing = await pool.execute("SELECT id FROM users WHERE email = ?", [email]);
-  if (existing[0].length) return;
   const timestamp = toMysqlDate(new Date());
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  if (existing[0].length) {
+    await pool.execute(
+      `UPDATE users
+       SET name = ?, password_hash = ?, role = ?, target_score = ?, updated_at = ?
+       WHERE email = ?`,
+      [name, passwordHash, role, targetScore, timestamp, email],
+    );
+    return;
+  }
+
   await pool.execute(
     `INSERT INTO users (id, name, email, password_hash, role, target_score, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [crypto.randomUUID(), name, email, await bcrypt.hash(password, 12), role, targetScore, timestamp, timestamp],
+    [crypto.randomUUID(), name, email, passwordHash, role, targetScore, timestamp, timestamp],
   );
 }
 

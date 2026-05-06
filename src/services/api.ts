@@ -1,4 +1,4 @@
-import type { AttemptMode, PlanSlug, Question, Skill, UserAttempt } from "../types";
+import type { Answer, AttemptMode, PlanSlug, Question, Skill, UserAttempt } from "../types";
 
 const API_BASE_URL = ((import.meta as unknown as { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL) ?? "http://127.0.0.1:8000/api";
 
@@ -103,6 +103,21 @@ export function deleteAdminQuestionApi(questionId: number) {
   return apiRequest<{ success: true; question: ApiAdminQuestion }>(`/admin/questions/${questionId}`, { method: "DELETE" });
 }
 
+export async function uploadAdminMediaApi(file: File) {
+  const response = await fetch(`${API_BASE_URL}/admin/upload`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": file.type,
+      "X-File-Name": file.name,
+    },
+    body: await file.arrayBuffer(),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new ApiError(response.status, payload.message ?? "Upload failed.", payload.code, payload);
+  return payload as { success: true; file: { key: string; url: string; mimetype: string; size: number } };
+}
+
 export function mapApiQuestion(question: ApiQuestion): Question {
   return {
     id: question.id,
@@ -133,10 +148,19 @@ export function mapApiAdminQuestion(question: ApiAdminQuestion): Question {
     passageText: question.passageText,
     audioUrl: question.audioUrl,
     imageUrl: question.imageUrl,
-  };
+    answers: question.answers?.map((answer) => ({
+      id: answer.id,
+      questionId: question.id,
+      answerText: answer.answerText,
+      isCorrect: answer.isCorrect,
+      displayOrder: answer.displayOrder,
+      explanation: answer.explanation,
+    })),
+  } as Question & { answers?: Answer[] };
 }
 
 function questionToAdminPayload(question: Question) {
+  const adminQuestion = question as Question & { answers?: Answer[] };
   return {
     skill: question.skill,
     part: question.part,
@@ -151,6 +175,13 @@ function questionToAdminPayload(question: Question) {
     difficulty_score: question.difficultyScore,
     estimated_time_seconds: question.estimatedTimeSeconds,
     is_active: question.isActive,
+    answers: adminQuestion.answers?.map((answer) => ({
+      id: answer.id > 0 ? answer.id : undefined,
+      answer_text: answer.answerText,
+      is_correct: answer.isCorrect,
+      display_order: answer.displayOrder,
+      explanation: answer.explanation ?? null,
+    })),
   };
 }
 

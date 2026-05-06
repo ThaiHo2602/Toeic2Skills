@@ -49,6 +49,7 @@ import {
   submitAttemptApi,
   subscribeApi,
   updateAdminQuestionApi,
+  uploadAdminMediaApi,
 } from "./services/api";
 import { createInitialState, loadState, saveState, submitAttempt } from "./services/storage";
 import { checkClientRateLimit, normalizeEmail, sanitizePlainText, validateAuthPayload } from "./services/security";
@@ -159,7 +160,26 @@ function App() {
   }, [language]);
 
   const t = translations[language];
-  const summary = getSubscriptionSummary(state, state.user);
+  const localSummary = getSubscriptionSummary(state, state.user);
+  const isAdmin = state.user.role === "admin";
+  const summary = isAdmin
+    ? {
+        ...localSummary,
+        isPremium: true,
+        plan: "premium_yearly" as const,
+        planName: "Admin",
+        dailyTestLimit: null,
+        remainingTestsToday: null,
+        features: {
+          ai_explanation: true,
+          weakness_analysis: true,
+          adaptive_learning: true,
+          advanced_dashboard: true,
+          unlimited_tests: true,
+          recommendations: true,
+        },
+      }
+    : localSummary;
   const latestAttempt = state.attempts[0];
   const recentQuestionIds = state.attempts.slice(0, 5).flatMap((attempt) => attempt.answers.map((answer) => answer.questionId));
   const estimatedTotal =
@@ -475,6 +495,7 @@ function App() {
           id: response.user.id,
           name: response.user.name,
           email: response.user.email,
+          role: response.user.role,
           targetScore: response.user.targetScore,
         },
       });
@@ -493,6 +514,7 @@ function App() {
         ...state.user,
         name: sanitizePlainText(payload.name ?? state.user.name, 80) || state.user.name,
         email: normalizeEmail(payload.email) || state.user.email,
+        role: normalizeEmail(payload.email) === "admin@example.com" ? "admin" : state.user.role ?? "user",
       },
     });
   }
@@ -532,7 +554,7 @@ function App() {
     return <AuthScreen t={t} language={language} onLanguageChange={setLanguage} onSubmit={completeAuth} />;
   }
 
-  if (!state.auth.onboardingCompleted) {
+  if (!state.auth.onboardingCompleted && !isAdmin) {
     return (
       <OnboardingScreen
         t={t}
@@ -1700,6 +1722,7 @@ function AdminQuestionBankScreen({
   const [part, setPart] = useState<"all" | number>("all");
   const [difficulty, setDifficulty] = useState<"all" | Question["difficultyLevel"]>("all");
   const [selectedId, setSelectedId] = useState(state.questions[0]?.id ?? 0);
+  const [adminNotice, setAdminNotice] = useState<string | null>(null);
 
   const filteredQuestions = state.questions.filter((question) => {
     if (skill !== "all" && question.skill !== skill) return false;
@@ -1732,7 +1755,8 @@ function AdminQuestionBankScreen({
       attemptCount: 0,
       correctCount: 0,
       isActive: true,
-    };
+      answers: createDefaultAnswers(nextId, "on"),
+    } as Question & { answers: Answer[] };
     onAddQuestion(sample);
     setSelectedId(nextId);
     onSelectPart(sample.part);
@@ -1818,10 +1842,18 @@ function AdminQuestionBankScreen({
             {selectedQuestion && <span>ID {selectedQuestion.id}</span>}
           </div>
           {selectedQuestion ? (
-            <QuestionMetadataEditor t={t} question={selectedQuestion} onSave={onUpdateQuestion} />
+            <QuestionMetadataEditor
+              t={t}
+              question={selectedQuestion}
+              onSave={(question) => {
+                onUpdateQuestion(question);
+                setAdminNotice("Saved question metadata and answers.");
+              }}
+            />
           ) : (
             <p>{t.admin.noSelection}</p>
           )}
+          {adminNotice && <p className="form-success">{adminNotice}</p>}
         </GlassCard>
 
         <GlassCard className="admin-preview-card">
@@ -1854,14 +1886,38 @@ function QuestionMetadataEditor({
   question: Question;
   onSave: (question: Question) => void;
 }) {
-  const [draft, setDraft] = useState<Question>(question);
+  const [draft, setDraft] = useState<Question & { answers?: Answer[] }>(() => withEditableAnswers(question));
 
   useEffect(() => {
-    setDraft(question);
+    setDraft(withEditableAnswers(question));
   }, [question]);
 
   function update<K extends keyof Question>(key: K, value: Question[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateAnswer(index: number, patch: Partial<Answer>) {
+    setDraft((current) => ({
+      ...current,
+      answers: (current.answers ?? createDefaultAnswers(current.id)).map((answer, answerIndex) =>
+        answerIndex === index ? { ...answer, ...patch } : answer,
+      ),
+    }));
+  }
+
+  function setCorrectAnswer(index: number) {
+    setDraft((current) => ({
+      ...current,
+      answers: (current.answers ?? createDefaultAnswers(current.id)).map((answer, answerIndex) => ({
+        ...answer,
+        isCorrect: answerIndex === index,
+      })),
+    }));
+  }
+
+  async function uploadMedia(file: File, key: "audioUrl" | "imageUrl") {
+    const response = await uploadAdminMediaApi(file);
+    update(key, response.file.url as Question[typeof key]);
   }
 
   return (
@@ -1877,6 +1933,10 @@ function QuestionMetadataEditor({
         <textarea value={draft.questionText ?? ""} onChange={(event) => update("questionText", event.target.value)} />
       </label>
       <div className="admin-form-grid">
+        <label>
+          <span>Type</span>
+          <input value={draft.questionType} onChange={(event) => update("questionType", event.target.value)} />
+        </label>
         <label>
           <span>{t.admin.filterSkill}</span>
           <select value={draft.skill} onChange={(event) => update("skill", event.target.value as Skill)}>
@@ -1906,6 +1966,48 @@ function QuestionMetadataEditor({
             onChange={(event) => update("difficultyScore", Number(event.target.value))}
           />
         </label>
+        <label>
+          <span>{t.admin.estimatedTime}</span>
+          <input
+            type="number"
+            min={5}
+            max={600}
+            value={draft.estimatedTimeSeconds}
+            onChange={(event) => update("estimatedTimeSeconds", Number(event.target.value))}
+          />
+        </label>
+      </div>
+      <label>
+        <span>{t.admin.passage}</span>
+        <textarea value={draft.passageText ?? ""} onChange={(event) => update("passageText", event.target.value)} />
+      </label>
+      <label>
+        <span>{t.admin.transcript}</span>
+        <textarea value={draft.transcript ?? ""} onChange={(event) => update("transcript", event.target.value)} />
+      </label>
+      <div className="admin-form-grid">
+        <label>
+          <span>Image URL</span>
+          <input value={draft.imageUrl ?? ""} onChange={(event) => update("imageUrl", event.target.value)} />
+          <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => event.target.files?.[0] && uploadMedia(event.target.files[0], "imageUrl")} />
+        </label>
+        <label>
+          <span>Audio URL</span>
+          <input value={draft.audioUrl ?? ""} onChange={(event) => update("audioUrl", event.target.value)} />
+          <input type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/x-m4a" onChange={(event) => event.target.files?.[0] && uploadMedia(event.target.files[0], "audioUrl")} />
+        </label>
+      </div>
+      <div className="admin-answer-editor">
+        <strong>{t.admin.answers}</strong>
+        {(draft.answers ?? createDefaultAnswers(draft.id)).map((answer, index) => (
+          <div className="admin-answer-edit-row" key={`${answer.id}-${index}`}>
+            <label>
+              <input type="radio" name={`correct-${draft.id}`} checked={answer.isCorrect} onChange={() => setCorrectAnswer(index)} />
+              <span>{String.fromCharCode(65 + index)}</span>
+            </label>
+            <input value={answer.answerText} onChange={(event) => updateAnswer(index, { answerText: event.target.value })} />
+          </div>
+        ))}
       </div>
       <label>
         <span>{t.admin.explanation}</span>
@@ -1921,7 +2023,7 @@ function QuestionMetadataEditor({
 }
 
 function AdminQuestionPreview({ t, question }: { t: Translation; question: Question }) {
-  const questionAnswers = answers.filter((answer) => answer.questionId === question.id).sort((a, b) => a.displayOrder - b.displayOrder);
+  const questionAnswers = ((question as Question & { answers?: Answer[] }).answers ?? answers.filter((answer) => answer.questionId === question.id)).sort((a, b) => a.displayOrder - b.displayOrder);
   return (
     <div className="admin-preview">
       <div className="admin-preview-meta">
@@ -1959,6 +2061,24 @@ function weaknessLabel(weakness: { weaknessType: string; part?: number; topicId?
 function mergeQuestions(existing: Question[], incoming: Question[]) {
   const incomingIds = new Set(incoming.map((question) => question.id));
   return [...incoming, ...existing.filter((question) => !incomingIds.has(question.id))];
+}
+
+function createDefaultAnswers(questionId: number, correctText = ""): Answer[] {
+  return [0, 1, 2, 3].map((index) => ({
+    id: -(questionId * 10 + index + 1),
+    questionId,
+    answerText: index === 0 ? correctText : "",
+    isCorrect: index === 0,
+    displayOrder: index + 1,
+  }));
+}
+
+function withEditableAnswers(question: Question): Question & { answers?: Answer[] } {
+  const existingAnswers = (question as Question & { answers?: Answer[] }).answers ?? answers.filter((answer) => answer.questionId === question.id);
+  return {
+    ...question,
+    answers: existingAnswers.length ? [...existingAnswers].sort((a, b) => a.displayOrder - b.displayOrder) : createDefaultAnswers(question.id),
+  };
 }
 
 function apiErrorToDecision(error: ApiError): AccessDecision {

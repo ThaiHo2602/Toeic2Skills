@@ -1,5 +1,7 @@
 import bcrypt from "bcryptjs";
 import express from "express";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { config } from "./config.js";
 import { insert, isDatabaseAvailable, query, toMysqlDate } from "./db.js";
 import {
@@ -277,7 +279,7 @@ router.delete("/admin/questions/:id", requireAuth, requireRole("admin"), validat
   res.json({ success: true, question: questionWithReview(question) });
 });
 
-router.post("/admin/upload", requireAuth, requireRole("admin"), uploadRateLimit, uploadBody, (req, res) => {
+router.post("/admin/upload", requireAuth, requireRole("admin"), uploadRateLimit, uploadBody, async (req, res) => {
   const mimetype = req.headers["content-type"]?.split(";")[0];
   if (!mimetype || !allowedUploadMimeTypes.includes(mimetype)) {
     return res.status(422).json({ success: false, code: "INVALID_FILE_TYPE" });
@@ -288,8 +290,11 @@ router.post("/admin/upload", requireAuth, requireRole("admin"), uploadRateLimit,
   const rawName = String(req.headers["x-file-name"] ?? "upload.bin");
   const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 120) || "upload.bin";
   const key = `${crypto.randomUUID()}-${safeName}`;
+  const uploadDir = path.resolve("uploads");
+  await mkdir(uploadDir, { recursive: true });
+  await writeFile(path.join(uploadDir, key), req.body);
   store.adminActionLogs.unshift({ id: crypto.randomUUID(), userId: req.user.id, action: "upload", key, mimetype, size: req.body.length, createdAt: new Date().toISOString() });
-  res.status(201).json({ success: true, file: { key, mimetype, size: req.body.length } });
+  res.status(201).json({ success: true, file: { key, url: `${config.publicBaseUrl}/uploads/${key}`, mimetype, size: req.body.length } });
 });
 
 function createSessionCookie(res, userId) {
