@@ -35,6 +35,7 @@ export async function initDatabase() {
       waitForConnections: true,
       connectionLimit: 10,
       namedPlaceholders: true,
+      multipleStatements: true,
     });
 
     await createSchema();
