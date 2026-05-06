@@ -1,7 +1,10 @@
 import { createApp } from "./app.js";
 import { config } from "./config.js";
-import { seedDemoUsers } from "./store.js";
+import { hydrateStoreFromDatabase, initDatabase } from "./db.js";
+import { seedDemoUsers, store } from "./store.js";
 
+await initDatabase();
+await hydrateStoreFromDatabase(store);
 await seedDemoUsers();
 
 const app = createApp();

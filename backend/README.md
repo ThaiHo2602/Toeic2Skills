@@ -16,6 +16,31 @@ API base URL:
 http://127.0.0.1:8000/api
 ```
 
+## MySQL
+
+The backend uses MySQL when it is available and falls back to the in-memory demo store when MySQL is offline.
+
+For XAMPP:
+
+1. Start Apache/MySQL from XAMPP Control Panel.
+2. Copy `.env.example` to `.env`.
+3. Keep these defaults unless your MySQL password is different:
+
+```env
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=
+MYSQL_DATABASE=toeic2skills
+```
+
+When the backend starts, it will automatically:
+
+- create database `toeic2skills` if needed
+- create tables for users, plans, questions, answers, subscriptions, usages, attempts, user answers, feature logs, payments, vocabulary
+- seed Free/Premium plans
+- seed demo users and sample TOEIC questions
+
 Demo accounts:
 
 ```text
@@ -73,7 +98,7 @@ POST /api/admin/upload
 
 ## Production Notes
 
-This MVP backend uses an in-memory store so it can run immediately. Replace `src/store.js` with a database repository before production:
+This MVP backend keeps an in-memory mirror for fast demo behavior and persists core records to MySQL when available. Before production, replace the mirror layer with repository classes that read/write directly from MySQL on every request:
 
 - PostgreSQL + Prisma, or Laravel + MySQL/PostgreSQL.
 - Store sessions/refresh tokens in DB or Redis.

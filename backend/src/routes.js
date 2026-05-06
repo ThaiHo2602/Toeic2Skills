@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import express from "express";
 import { config } from "./config.js";
+import { insert, isDatabaseAvailable, toMysqlDate } from "./db.js";
 import {
   aiRateLimit,
   checkDailyTestLimit,
@@ -46,6 +47,7 @@ router.post("/auth/register", registerRateLimit, validate(schemas.register), asy
     updatedAt: new Date().toISOString(),
   };
   store.users.push(user);
+  await persistUser(user);
   createSessionCookie(res, user.id);
   res.status(201).json({ success: true, user: publicUser(user) });
 });
@@ -97,7 +99,7 @@ router.get("/me/usage/today", requireAuth, (req, res) => {
   res.json({ success: true, usage: getTodayUsage(req.user.id) });
 });
 
-router.post("/subscriptions/subscribe", requireAuth, validate(schemas.subscribe), (req, res) => {
+router.post("/subscriptions/subscribe", requireAuth, validate(schemas.subscribe), async (req, res) => {
   const plan = store.plans.find((item) => item.slug === req.validated.body.plan_slug && item.isActive);
   if (!plan || plan.slug === "free") return res.status(404).json({ success: false, code: "PLAN_NOT_FOUND" });
   const startedAt = new Date().toISOString();
@@ -110,15 +112,17 @@ router.post("/subscriptions/subscribe", requireAuth, validate(schemas.subscribe)
   const payment = { id: crypto.randomUUID(), userId: req.user.id, planId: plan.id, amount: plan.price, currency: plan.currency, provider: "mock", providerTransactionId: `mock_${Date.now()}`, status: "success", paidAt: startedAt, createdAt: startedAt, updatedAt: startedAt };
   store.subscriptions.unshift(subscription);
   store.paymentTransactions.unshift(payment);
+  await persistSubscriptionPurchase(req.user.id, subscription, payment);
   res.json({ success: true, subscription, payment });
 });
 
-router.post("/subscriptions/cancel", requireAuth, (req, res) => {
+router.post("/subscriptions/cancel", requireAuth, async (req, res) => {
   const subscription = getActiveSubscription(req.user.id);
   if (!subscription) return res.status(404).json({ success: false, code: "NO_ACTIVE_SUBSCRIPTION" });
   subscription.status = "cancelled";
   subscription.cancelledAt = new Date().toISOString();
   subscription.updatedAt = subscription.cancelledAt;
+  await persistSubscriptionCancel(subscription);
   res.json({ success: true, subscription });
 });
 
@@ -130,31 +134,34 @@ router.get("/features/:featureKey/access", requireAuth, validate(schemas.feature
   res.json({ success: true, feature: featureKey, allowed, upgrade_required: !allowed });
 });
 
-router.post("/practice/start", requireAuth, validate(schemas.startPractice), checkDailyTestLimit, (req, res) => {
+router.post("/practice/start", requireAuth, validate(schemas.startPractice), checkDailyTestLimit, async (req, res) => {
   const { part, question_count } = req.validated.body;
   const selected = store.questions.filter((question) => question.part === part && question.isActive).slice(0, question_count);
   const attempt = createAttempt(req.user.id, "practice", selected);
+  await persistAttempt(attempt);
   res.status(201).json({ success: true, attempt, questions: selected.map(sanitizeQuestionForTaking) });
 });
 
-router.post("/practice/adaptive/start", requireAuth, requirePremiumFeature("adaptive_learning"), validate(schemas.startPractice), checkDailyTestLimit, (req, res) => {
+router.post("/practice/adaptive/start", requireAuth, requirePremiumFeature("adaptive_learning"), validate(schemas.startPractice), checkDailyTestLimit, async (req, res) => {
   const { part, question_count } = req.validated.body;
   const selected = store.questions
     .filter((question) => question.part === part && question.isActive)
     .sort((a, b) => a.difficultyScore - b.difficultyScore)
     .slice(0, question_count);
   const attempt = createAttempt(req.user.id, "practice", selected, true);
+  await persistAttempt(attempt);
   res.status(201).json({ success: true, attempt, questions: selected.map(sanitizeQuestionForTaking) });
 });
 
-router.post(["/tests/start", "/mini-tests/start", "/full-tests/start"], requireAuth, checkDailyTestLimit, (req, res) => {
+router.post(["/tests/start", "/mini-tests/start", "/full-tests/start"], requireAuth, checkDailyTestLimit, async (req, res) => {
   const mode = req.path.includes("full") ? "full_test" : "mini_test";
   const selected = store.questions.filter((question) => question.isActive).slice(0, mode === "full_test" ? 200 : 20);
   const attempt = createAttempt(req.user.id, mode, selected);
+  await persistAttempt(attempt);
   res.status(201).json({ success: true, attempt, questions: selected.map(sanitizeQuestionForTaking) });
 });
 
-router.post("/attempts/:id/submit", requireAuth, validate(schemas.submitAttempt), (req, res) => {
+router.post("/attempts/:id/submit", requireAuth, validate(schemas.submitAttempt), async (req, res) => {
   const attempt = store.attempts.find((item) => item.id === req.validated.params.id && item.userId === req.user.id);
   if (!attempt) return res.status(404).json({ success: false, code: "ATTEMPT_NOT_FOUND" });
   if (attempt.status !== "in_progress") return res.status(409).json({ success: false, code: "ATTEMPT_ALREADY_SUBMITTED" });
@@ -186,6 +193,7 @@ router.post("/attempts/:id/submit", requireAuth, validate(schemas.submitAttempt)
   attempt.estimatedReadingScore = roundToNearest5(5 + (readingCorrect / readingTotal) * 490);
   attempt.estimatedTotalScore = attempt.estimatedListeningScore + attempt.estimatedReadingScore;
   attempt.scoreConfidence = attempt.mode === "full_test" ? 95 : Math.min(90, Math.round((attempt.questionIds.length / 100) * 100));
+  await persistAttemptSubmit(attempt, submittedAnswers);
 
   res.json({ success: true, attempt, locked_features: getCurrentPlan(req.user.id).slug === "free" ? lockedFeatures() : [] });
 });
@@ -277,4 +285,113 @@ function lockedFeatures() {
     { feature: "weakness_analysis", message: "Nâng cấp Premium để xem phân tích điểm yếu." },
     { feature: "recommendations", message: "Nâng cấp Premium để nhận lộ trình ôn tập cá nhân hóa." },
   ];
+}
+
+async function persistUser(user) {
+  if (!isDatabaseAvailable()) return;
+  await insert(
+    `INSERT INTO users (id, name, email, password_hash, role, target_score, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [user.id, user.name, user.email, user.passwordHash, user.role, user.targetScore, toMysqlDate(user.createdAt), toMysqlDate(user.updatedAt)],
+  );
+}
+
+async function persistSubscriptionPurchase(userId, subscription, payment) {
+  if (!isDatabaseAvailable()) return;
+  await insert("UPDATE subscriptions SET status='cancelled', cancelled_at=?, updated_at=? WHERE user_id=? AND status='active' AND id<>?", [
+    toMysqlDate(subscription.startedAt),
+    toMysqlDate(subscription.startedAt),
+    userId,
+    subscription.id,
+  ]);
+  await insert(
+    `INSERT INTO subscriptions (id, user_id, plan_id, status, started_at, expires_at, cancelled_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      subscription.id,
+      subscription.userId,
+      subscription.planId,
+      subscription.status,
+      toMysqlDate(subscription.startedAt),
+      toMysqlDate(subscription.expiresAt),
+      null,
+      toMysqlDate(subscription.createdAt),
+      toMysqlDate(subscription.updatedAt),
+    ],
+  );
+  await insert(
+    `INSERT INTO payment_transactions (id, user_id, plan_id, amount, currency, provider, provider_transaction_id, status, paid_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      payment.id,
+      payment.userId,
+      payment.planId,
+      payment.amount,
+      payment.currency,
+      payment.provider,
+      payment.providerTransactionId,
+      payment.status,
+      toMysqlDate(payment.paidAt),
+      toMysqlDate(payment.createdAt),
+      toMysqlDate(payment.updatedAt),
+    ],
+  );
+}
+
+async function persistSubscriptionCancel(subscription) {
+  if (!isDatabaseAvailable()) return;
+  await insert("UPDATE subscriptions SET status='cancelled', cancelled_at=?, updated_at=? WHERE id=?", [
+    toMysqlDate(subscription.cancelledAt),
+    toMysqlDate(subscription.updatedAt),
+    subscription.id,
+  ]);
+}
+
+async function persistAttempt(attempt) {
+  if (!isDatabaseAvailable()) return;
+  await insert(
+    `INSERT INTO user_attempts (id, user_id, mode, adaptive, status, started_at, question_ids, total_questions, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      attempt.id,
+      attempt.userId,
+      attempt.mode,
+      attempt.adaptive,
+      attempt.status,
+      toMysqlDate(attempt.startedAt),
+      JSON.stringify(attempt.questionIds),
+      attempt.totalQuestions,
+      toMysqlDate(attempt.startedAt),
+      toMysqlDate(attempt.startedAt),
+    ],
+  );
+}
+
+async function persistAttemptSubmit(attempt, submittedAnswers) {
+  if (!isDatabaseAvailable()) return;
+  await insert(
+    `UPDATE user_attempts
+     SET status=?, submitted_at=?, correct_count=?, accuracy=?, estimated_listening_score=?, estimated_reading_score=?, estimated_total_score=?, score_confidence=?, updated_at=?
+     WHERE id=?`,
+    [
+      attempt.status,
+      toMysqlDate(attempt.submittedAt),
+      attempt.correctCount,
+      attempt.accuracy,
+      attempt.estimatedListeningScore,
+      attempt.estimatedReadingScore,
+      attempt.estimatedTotalScore,
+      attempt.scoreConfidence,
+      toMysqlDate(attempt.submittedAt),
+      attempt.id,
+    ],
+  );
+  for (const answer of submittedAnswers) {
+    const timestamp = toMysqlDate(answer.answeredAt);
+    await insert(
+      `INSERT INTO user_answers (id, user_attempt_id, user_id, question_id, selected_answer_id, is_correct, answered_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [crypto.randomUUID(), attempt.id, attempt.userId, answer.questionId, answer.selectedAnswerId, answer.isCorrect, timestamp, timestamp, timestamp],
+    );
+  }
 }

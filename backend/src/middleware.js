@@ -1,6 +1,7 @@
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { config } from "./config.js";
+import { insert, isDatabaseAvailable, toMysqlDate } from "./db.js";
 import { getCurrentPlan, getTodayUsage, planHasFeature, store } from "./store.js";
 
 export const loginRateLimit = rateLimit({
@@ -72,7 +73,7 @@ export function requirePremiumFeature(featureKey) {
   };
 }
 
-export function checkDailyTestLimit(req, res, next) {
+export async function checkDailyTestLimit(req, res, next) {
   const plan = getCurrentPlan(req.user.id);
   const usage = getTodayUsage(req.user.id);
   const unlimited = plan.dailyTestLimit === null || plan.dailyTestLimit < 0;
@@ -87,6 +88,7 @@ export function checkDailyTestLimit(req, res, next) {
 
   usage.testCount += 1;
   usage.updatedAt = new Date().toISOString();
+  await persistUsage(usage);
   next();
 }
 
@@ -159,4 +161,22 @@ export function errorHandler(error, req, res, next) {
     code: "INTERNAL_SERVER_ERROR",
     message: config.isProduction ? "Something went wrong." : error.message,
   });
+}
+
+async function persistUsage(usage) {
+  if (!isDatabaseAvailable()) return;
+  await insert(
+    `INSERT INTO user_daily_usages (id, user_id, usage_date, test_count, ai_explanation_count, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE test_count=VALUES(test_count), ai_explanation_count=VALUES(ai_explanation_count), updated_at=VALUES(updated_at)`,
+    [
+      usage.id,
+      usage.userId,
+      usage.usageDate,
+      usage.testCount,
+      usage.aiExplanationCount,
+      toMysqlDate(usage.createdAt),
+      toMysqlDate(usage.updatedAt),
+    ],
+  );
 }

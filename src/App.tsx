@@ -34,6 +34,18 @@ import {
 } from "./components/learning-ui";
 import type { AccessDecision, Answer, AppState, FeatureKey, PlanSlug, Question, Skill, UserAttempt, VocabularyCollectionItem } from "./types";
 import { generateAdaptivePractice, generateStandardPractice, generateTestQuestions, partKey } from "./services/adaptive";
+import {
+  ApiError,
+  cancelSubscriptionApi,
+  loginApi,
+  mapApiAttempt,
+  mapApiQuestion,
+  registerApi,
+  startPracticeApi,
+  startTestApi,
+  submitAttemptApi,
+  subscribeApi,
+} from "./services/api";
 import { createInitialState, loadState, saveState, submitAttempt } from "./services/storage";
 import { checkClientRateLimit, normalizeEmail, sanitizePlainText, validateAuthPayload } from "./services/security";
 import {
@@ -168,8 +180,29 @@ function App() {
     };
   }
 
-  function startPractice(part = selectedPart, count = 10, adaptive = false) {
+  async function startPractice(part = selectedPart, count = 10, adaptive = false) {
     const skill: Skill = part <= 4 ? "listening" : "reading";
+    try {
+      const response = await startPracticeApi(part, count, adaptive);
+      const backendQuestions = response.questions.map(mapApiQuestion);
+      const backendAttempt = mapApiAttempt(response.attempt);
+      setState({
+        ...state,
+        questions: mergeQuestions(state.questions, backendQuestions),
+      });
+      setActiveAttempt({ ...backendAttempt, skill, part });
+      setCurrentIndex(0);
+      setRevealedQuestionId(null);
+      setView("practice");
+      return;
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 403 || error.status === 401)) {
+        setAccessModal(apiErrorToDecision(error));
+        return;
+      }
+      console.warn("Backend practice API unavailable, falling back to local demo.", error);
+    }
+
     const featureGuard = adaptive ? checkPremiumFeature(state, state.user, "adaptive_learning") : undefined;
     if (featureGuard && !featureGuard.decision.success) {
       setState(featureGuard.state);
@@ -203,7 +236,28 @@ function App() {
     setView("practice");
   }
 
-  function startTest(mode: "mini_test" | "full_test" | "placement") {
+  async function startTest(mode: "mini_test" | "full_test" | "placement") {
+    try {
+      const response = await startTestApi(mode);
+      const backendQuestions = response.questions.map(mapApiQuestion);
+      const backendAttempt = mapApiAttempt(response.attempt);
+      setState({
+        ...state,
+        questions: mergeQuestions(state.questions, backendQuestions),
+      });
+      setActiveAttempt(backendAttempt);
+      setCurrentIndex(0);
+      setRevealedQuestionId(null);
+      setView("practice");
+      return;
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 403 || error.status === 401)) {
+        setAccessModal(apiErrorToDecision(error));
+        return;
+      }
+      console.warn("Backend test API unavailable, falling back to local demo.", error);
+    }
+
     const limitGuard = checkDailyTestLimit(state, state.user);
     if (!limitGuard.decision.success) {
       setState(limitGuard.state);
@@ -245,8 +299,31 @@ function App() {
     setCurrentIndex((index) => Math.min(index + 1, (activeAttempt?.questionIds.length ?? 1) - 1));
   }
 
-  function finishAttempt() {
+  async function finishAttempt() {
     if (!activeAttempt) return;
+    try {
+      const response = await submitAttemptApi(activeAttempt);
+      const submitted = {
+        ...activeAttempt,
+        ...mapApiAttempt(response.attempt),
+        answers: activeAttempt.answers,
+        lockedFeatures: response.locked_features?.map((feature) => ({
+          feature: feature.feature as FeatureKey,
+          message: feature.message,
+        })),
+      };
+      setState({
+        ...state,
+        attempts: [submitted, ...state.attempts.filter((attempt) => attempt.id !== submitted.id)],
+      });
+      setActiveAttempt(null);
+      setRevealedQuestionId(null);
+      setView("progress");
+      return;
+    } catch (error) {
+      console.warn("Backend submit API unavailable, falling back to local scoring.", error);
+    }
+
     setState(submitAttempt(state, activeAttempt));
     setActiveAttempt(null);
     setRevealedQuestionId(null);
@@ -293,7 +370,12 @@ function App() {
     if (!result.decision.success) setAccessModal(result.decision);
   }
 
-  function subscribe(planSlug: PlanSlug) {
+  async function subscribe(planSlug: PlanSlug) {
+    try {
+      await subscribeApi(planSlug);
+    } catch (error) {
+      console.warn("Backend subscribe API unavailable, using local demo subscription.", error);
+    }
     setState(subscribeUser(state, state.user, planSlug));
     setAccessModal(null);
     setView("premium");
@@ -307,7 +389,40 @@ function App() {
     setView("home");
   }
 
-  function completeAuth(payload: { name?: string; email: string }) {
+  async function cancelCurrentSubscription() {
+    try {
+      await cancelSubscriptionApi();
+    } catch (error) {
+      console.warn("Backend cancel API unavailable, using local demo cancellation.", error);
+    }
+    setState(cancelSubscription(state, state.user));
+  }
+
+  async function completeAuth(payload: { mode: "login" | "register"; name?: string; email: string; password: string }) {
+    try {
+      const response =
+        payload.mode === "register"
+          ? await registerApi(sanitizePlainText(payload.name ?? state.user.name, 80), payload.email, payload.password)
+          : await loginApi(payload.email, payload.password);
+      setState({
+        ...state,
+        auth: {
+          ...state.auth,
+          isAuthenticated: true,
+        },
+        user: {
+          ...state.user,
+          id: response.user.id,
+          name: response.user.name,
+          email: response.user.email,
+          targetScore: response.user.targetScore,
+        },
+      });
+      return;
+    } catch (error) {
+      console.warn("Backend auth API unavailable, using local demo auth.", error);
+    }
+
     setState({
       ...state,
       auth: {
@@ -426,7 +541,7 @@ function App() {
           state={state}
           summary={summary}
           onSubscribe={subscribe}
-          onCancel={() => setState(cancelSubscription(state, state.user))}
+          onCancel={cancelCurrentSubscription}
           onReset={resetDemo}
         />
       )}
@@ -465,7 +580,7 @@ function AuthScreen({
   t: Translation;
   language: Language;
   onLanguageChange: (language: Language) => void;
-  onSubmit: (payload: { name?: string; email: string }) => void;
+  onSubmit: (payload: { mode: "login" | "register"; name?: string; email: string; password: string }) => void;
 }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("Nguyễn Văn A");
@@ -523,7 +638,7 @@ function AuthScreen({
             }
 
             setFormError(null);
-            onSubmit({ name: mode === "register" ? sanitizePlainText(name, 80) : undefined, email: normalizeEmail(email) });
+            onSubmit({ mode, name: mode === "register" ? sanitizePlainText(name, 80) : undefined, email: normalizeEmail(email), password });
           }}
         >
           {mode === "register" && (
@@ -1789,6 +1904,20 @@ function weaknessLabel(weakness: { weaknessType: string; part?: number; topicId?
   if (weakness.weaknessType === "part") return `Part ${weakness.part}`;
   if (weakness.weaknessType === "topic") return topics.find((topic) => topic.id === weakness.topicId)?.name ?? "Topic";
   return grammarPoints.find((grammar) => grammar.id === weakness.grammarPointId)?.name ?? "Grammar";
+}
+
+function mergeQuestions(existing: Question[], incoming: Question[]) {
+  const incomingIds = new Set(incoming.map((question) => question.id));
+  return [...incoming, ...existing.filter((question) => !incomingIds.has(question.id))];
+}
+
+function apiErrorToDecision(error: ApiError): AccessDecision {
+  return {
+    success: false,
+    code: error.code === "DAILY_TEST_LIMIT_REACHED" ? "DAILY_TEST_LIMIT_REACHED" : "PREMIUM_REQUIRED",
+    message: error.message,
+    upgradeRequired: error.status === 403,
+  };
 }
 
 export default App;
