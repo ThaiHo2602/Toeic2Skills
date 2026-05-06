@@ -35,6 +35,7 @@ import {
 import type { AccessDecision, Answer, AppState, FeatureKey, PlanSlug, Question, Skill, UserAttempt, VocabularyCollectionItem } from "./types";
 import { generateAdaptivePractice, generateStandardPractice, generateTestQuestions, partKey } from "./services/adaptive";
 import { createInitialState, loadState, saveState, submitAttempt } from "./services/storage";
+import { checkClientRateLimit, normalizeEmail, sanitizePlainText, validateAuthPayload } from "./services/security";
 import {
   cancelSubscription,
   checkDailyTestLimit,
@@ -315,8 +316,8 @@ function App() {
       },
       user: {
         ...state.user,
-        name: payload.name?.trim() || state.user.name,
-        email: payload.email.trim() || state.user.email,
+        name: sanitizePlainText(payload.name ?? state.user.name, 80) || state.user.name,
+        email: normalizeEmail(payload.email) || state.user.email,
       },
     });
   }
@@ -469,7 +470,8 @@ function AuthScreen({
   const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("Nguyễn Văn A");
   const [email, setEmail] = useState("learner@example.com");
-  const [password, setPassword] = useState("password");
+  const [password, setPassword] = useState("Password1");
+  const [formError, setFormError] = useState<string | null>(null);
 
   return (
     <main className="auth-shell">
@@ -508,7 +510,20 @@ function AuthScreen({
           className="auth-form"
           onSubmit={(event) => {
             event.preventDefault();
-            onSubmit({ name: mode === "register" ? name : undefined, email });
+            const validation = validateAuthPayload({ name, email, password }, mode);
+            if (!validation.ok) {
+              setFormError(validation.message ?? "Invalid credentials.");
+              return;
+            }
+
+            const rateLimit = checkClientRateLimit(`auth:${mode}:${normalizeEmail(email)}`, mode === "login" ? 5 : 3, 60_000);
+            if (!rateLimit.ok) {
+              setFormError(rateLimit.message ?? "Too many attempts.");
+              return;
+            }
+
+            setFormError(null);
+            onSubmit({ name: mode === "register" ? sanitizePlainText(name, 80) : undefined, email: normalizeEmail(email) });
           }}
         >
           {mode === "register" && (
@@ -523,8 +538,9 @@ function AuthScreen({
           </label>
           <label>
             <span>{t.auth.password}</span>
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required />
           </label>
+          {formError && <p className="form-error" role="alert">{formError}</p>}
           <GradientButton>{t.auth.continue}</GradientButton>
           <p>{t.auth.demoHint}</p>
         </form>

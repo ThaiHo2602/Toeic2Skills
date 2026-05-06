@@ -471,6 +471,16 @@ kbd {
   font-size: 16px;
 }
 
+.form-error {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  border-radius: 16px;
+  color: #991b1b;
+  background: rgba(239, 68, 68, 0.08);
+  font-weight: 800;
+}
+
 .onboarding-shell {
   place-items: center;
 }
