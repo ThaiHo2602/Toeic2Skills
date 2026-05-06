@@ -148,6 +148,38 @@ export const schemas = {
   feature: z.object({
     params: z.object({ featureKey: z.enum(["ai_explanation", "weakness_analysis", "adaptive_learning", "advanced_dashboard", "unlimited_tests", "recommendations"]) }),
   }),
+  idParam: z.object({
+    params: z.object({ id: z.coerce.number().int().positive() }),
+  }),
+  adminQuestion: z.object({
+    body: z.object({
+      skill: z.enum(["listening", "reading"]),
+      part: z.number().int().min(1).max(7),
+      question_type: z.string().trim().min(2).max(80).optional(),
+      question_text: z.string().trim().min(1).max(5000).optional(),
+      passage_text: z.string().trim().max(50000).nullable().optional(),
+      transcript: z.string().trim().max(50000).nullable().optional(),
+      audio_url: z.string().trim().url().max(500).nullable().optional(),
+      image_url: z.string().trim().url().max(500).nullable().optional(),
+      explanation: z.string().trim().min(1).max(50000),
+      difficulty_level: z.enum(["easy", "medium", "hard"]),
+      difficulty_score: z.number().int().min(1).max(100),
+      estimated_time_seconds: z.number().int().min(5).max(600).default(30),
+      is_active: z.boolean().default(true),
+      answers: z
+        .array(
+          z.object({
+            id: z.number().int().positive().optional(),
+            answer_text: z.string().trim().min(1).max(5000),
+            is_correct: z.boolean(),
+            display_order: z.number().int().min(1).max(6),
+            explanation: z.string().trim().max(5000).nullable().optional(),
+          }),
+        )
+        .max(6)
+        .optional(),
+    }),
+  }),
 };
 
 export function notFound(req, res) {

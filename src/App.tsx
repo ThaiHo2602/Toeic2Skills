@@ -37,14 +37,18 @@ import { generateAdaptivePractice, generateStandardPractice, generateTestQuestio
 import {
   ApiError,
   cancelSubscriptionApi,
+  createAdminQuestionApi,
+  getAdminQuestionsApi,
   loginApi,
   mapApiAttempt,
+  mapApiAdminQuestion,
   mapApiQuestion,
   registerApi,
   startPracticeApi,
   startTestApi,
   submitAttemptApi,
   subscribeApi,
+  updateAdminQuestionApi,
 } from "./services/api";
 import { createInitialState, loadState, saveState, submitAttempt } from "./services/storage";
 import { checkClientRateLimit, normalizeEmail, sanitizePlainText, validateAuthPayload } from "./services/security";
@@ -161,6 +165,25 @@ function App() {
   const estimatedTotal =
     latestAttempt?.estimatedTotalScore ??
     ((state.skillStats.listening.estimatedScore ?? 250) + (state.skillStats.reading.estimatedScore ?? 250));
+
+  useEffect(() => {
+    if (view !== "admin" || !state.auth.isAuthenticated) return;
+    let cancelled = false;
+    getAdminQuestionsApi()
+      .then((response) => {
+        if (cancelled) return;
+        setState((current) => ({
+          ...current,
+          questions: mergeQuestions(current.questions, response.questions.map(mapApiAdminQuestion)),
+        }));
+      })
+      .catch((error) => {
+        console.warn("Admin Question Bank API unavailable or access denied.", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [view, state.auth.isAuthenticated]);
 
   function createAttempt(mode: UserAttempt["mode"], skill: Skill | "both", selectedQuestions: Question[], part?: number): UserAttempt {
     return {
@@ -398,6 +421,43 @@ function App() {
     setState(cancelSubscription(state, state.user));
   }
 
+  async function updateAdminQuestion(question: Question) {
+    try {
+      const response = await updateAdminQuestionApi(question);
+      const updated = mapApiAdminQuestion(response.question);
+      setState((current) => ({
+        ...current,
+        questions: current.questions.map((item) => (item.id === updated.id ? updated : item)),
+      }));
+      return;
+    } catch (error) {
+      console.warn("Admin update API unavailable, applying local update.", error);
+    }
+    setState({
+      ...state,
+      questions: state.questions.map((item) => (item.id === question.id ? question : item)),
+    });
+  }
+
+  async function addAdminQuestion(question: Question) {
+    try {
+      const response = await createAdminQuestionApi(question);
+      const created = mapApiAdminQuestion(response.question);
+      setState((current) => ({
+        ...current,
+        questions: [created, ...current.questions.filter((item) => item.id !== created.id)],
+      }));
+      setSelectedPart(created.part);
+      return;
+    } catch (error) {
+      console.warn("Admin create API unavailable, applying local create.", error);
+    }
+    setState({
+      ...state,
+      questions: [question, ...state.questions],
+    });
+  }
+
   async function completeAuth(payload: { mode: "login" | "register"; name?: string; email: string; password: string }) {
     try {
       const response =
@@ -551,18 +611,8 @@ function App() {
           t={t}
           state={state}
           onSelectPart={setSelectedPart}
-          onUpdateQuestion={(question) =>
-            setState({
-              ...state,
-              questions: state.questions.map((item) => (item.id === question.id ? question : item)),
-            })
-          }
-          onAddQuestion={(question) =>
-            setState({
-              ...state,
-              questions: [question, ...state.questions],
-            })
-          }
+          onUpdateQuestion={updateAdminQuestion}
+          onAddQuestion={addAdminQuestion}
         />
       )}
 

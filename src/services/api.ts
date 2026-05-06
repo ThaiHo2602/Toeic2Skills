@@ -81,6 +81,28 @@ export function submitAttemptApi(attempt: UserAttempt) {
   });
 }
 
+export function getAdminQuestionsApi() {
+  return apiRequest<{ success: true; questions: ApiAdminQuestion[] }>("/admin/questions");
+}
+
+export function createAdminQuestionApi(question: Question) {
+  return apiRequest<{ success: true; question: ApiAdminQuestion }>("/admin/questions", {
+    method: "POST",
+    json: questionToAdminPayload(question),
+  });
+}
+
+export function updateAdminQuestionApi(question: Question) {
+  return apiRequest<{ success: true; question: ApiAdminQuestion }>(`/admin/questions/${question.id}`, {
+    method: "PUT",
+    json: questionToAdminPayload(question),
+  });
+}
+
+export function deleteAdminQuestionApi(questionId: number) {
+  return apiRequest<{ success: true; question: ApiAdminQuestion }>(`/admin/questions/${questionId}`, { method: "DELETE" });
+}
+
 export function mapApiQuestion(question: ApiQuestion): Question {
   return {
     id: question.id,
@@ -92,7 +114,7 @@ export function mapApiQuestion(question: ApiQuestion): Question {
     transcript: question.transcript,
     audioUrl: question.audioUrl,
     imageUrl: question.imageUrl,
-    explanation: "",
+    explanation: question.explanation ?? "",
     difficultyLevel: question.difficultyLevel,
     difficultyScore: question.difficultyScore,
     estimatedTimeSeconds: question.estimatedTimeSeconds,
@@ -100,6 +122,35 @@ export function mapApiQuestion(question: ApiQuestion): Question {
     attemptCount: 0,
     correctCount: 0,
     isActive: question.isActive,
+  };
+}
+
+export function mapApiAdminQuestion(question: ApiAdminQuestion): Question {
+  return {
+    ...mapApiQuestion(question),
+    explanation: question.explanation,
+    transcript: question.transcript,
+    passageText: question.passageText,
+    audioUrl: question.audioUrl,
+    imageUrl: question.imageUrl,
+  };
+}
+
+function questionToAdminPayload(question: Question) {
+  return {
+    skill: question.skill,
+    part: question.part,
+    question_type: question.questionType,
+    question_text: question.questionText ?? "",
+    passage_text: question.passageText ?? null,
+    transcript: question.transcript ?? null,
+    audio_url: question.audioUrl ?? null,
+    image_url: question.imageUrl ?? null,
+    explanation: question.explanation,
+    difficulty_level: question.difficultyLevel,
+    difficulty_score: question.difficultyScore,
+    estimated_time_seconds: question.estimatedTimeSeconds,
+    is_active: question.isActive,
   };
 }
 
@@ -185,8 +236,21 @@ export interface ApiQuestion {
   transcript?: string;
   audioUrl?: string;
   imageUrl?: string;
+  explanation?: string;
   difficultyLevel: "easy" | "medium" | "hard";
   difficultyScore: number;
   estimatedTimeSeconds: number;
   isActive: boolean;
+}
+
+export interface ApiAdminQuestion extends ApiQuestion {
+  explanation: string;
+  answers?: Array<{
+    id: number;
+    questionId: number;
+    answerText: string;
+    isCorrect: boolean;
+    displayOrder: number;
+    explanation?: string;
+  }>;
 }

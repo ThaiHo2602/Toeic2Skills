@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import express from "express";
 import { config } from "./config.js";
-import { insert, isDatabaseAvailable, toMysqlDate } from "./db.js";
+import { insert, isDatabaseAvailable, query, toMysqlDate } from "./db.js";
 import {
   aiRateLimit,
   checkDailyTestLimit,
@@ -227,6 +227,56 @@ router.get("/admin/questions", requireAuth, requireRole("admin"), (req, res) => 
   res.json({ success: true, questions: store.questions.map(questionWithReview) });
 });
 
+router.post("/admin/questions", requireAuth, requireRole("admin"), validate(schemas.adminQuestion), async (req, res) => {
+  const question = buildAdminQuestion(req.validated.body);
+  const answers = assignAnswerIds(req.validated.body.answers ?? []);
+  store.questions.unshift(question);
+  if (answers.length) {
+    store.answers = [
+      ...answers.map((answer) => buildAdminAnswer(question.id, answer)),
+      ...store.answers,
+    ];
+  }
+  await persistAdminQuestion(question, answers);
+  logAdminAction(req.user.id, "create_question", question.id);
+  res.status(201).json({ success: true, question: questionWithReview(question) });
+});
+
+router.put("/admin/questions/:id", requireAuth, requireRole("admin"), validate(schemas.idParam.merge(schemas.adminQuestion)), async (req, res) => {
+  const question = store.questions.find((item) => item.id === req.validated.params.id);
+  if (!question) return res.status(404).json({ success: false, code: "QUESTION_NOT_FOUND" });
+  const updated = {
+    ...question,
+    ...apiQuestionToStoreFields(req.validated.body),
+    updatedAt: new Date().toISOString(),
+  };
+  store.questions = store.questions.map((item) => (item.id === updated.id ? updated : item));
+  if (req.validated.body.answers) {
+    const answers = assignAnswerIds(req.validated.body.answers);
+    store.answers = [
+      ...store.answers.filter((answer) => answer.questionId !== updated.id),
+      ...answers.map((answer) => buildAdminAnswer(updated.id, answer)),
+    ];
+    await persistAdminQuestion(updated, answers, true);
+  } else {
+    await persistAdminQuestion(updated, undefined, true);
+  }
+  logAdminAction(req.user.id, "update_question", updated.id);
+  res.json({ success: true, question: questionWithReview(updated) });
+});
+
+router.delete("/admin/questions/:id", requireAuth, requireRole("admin"), validate(schemas.idParam), async (req, res) => {
+  const question = store.questions.find((item) => item.id === req.validated.params.id);
+  if (!question) return res.status(404).json({ success: false, code: "QUESTION_NOT_FOUND" });
+  question.isActive = false;
+  question.updatedAt = new Date().toISOString();
+  if (isDatabaseAvailable()) {
+    await insert("UPDATE questions SET is_active=false, updated_at=? WHERE id=?", [toMysqlDate(question.updatedAt), question.id]);
+  }
+  logAdminAction(req.user.id, "deactivate_question", question.id);
+  res.json({ success: true, question: questionWithReview(question) });
+});
+
 router.post("/admin/upload", requireAuth, requireRole("admin"), uploadRateLimit, uploadBody, (req, res) => {
   const mimetype = req.headers["content-type"]?.split(";")[0];
   if (!mimetype || !allowedUploadMimeTypes.includes(mimetype)) {
@@ -285,6 +335,146 @@ function lockedFeatures() {
     { feature: "weakness_analysis", message: "Nâng cấp Premium để xem phân tích điểm yếu." },
     { feature: "recommendations", message: "Nâng cấp Premium để nhận lộ trình ôn tập cá nhân hóa." },
   ];
+}
+
+function buildAdminQuestion(body) {
+  const timestamp = new Date().toISOString();
+  return {
+    id: nextQuestionId(),
+    ...apiQuestionToStoreFields(body),
+    attemptCount: 0,
+    correctCount: 0,
+    correctRate: 0,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function apiQuestionToStoreFields(body) {
+  return {
+    skill: body.skill,
+    part: body.part,
+    questionType: body.question_type ?? "incomplete_sentence",
+    questionText: body.question_text ?? "",
+    passageText: body.passage_text ?? undefined,
+    transcript: body.transcript ?? undefined,
+    audioUrl: body.audio_url ?? undefined,
+    imageUrl: body.image_url ?? undefined,
+    explanation: body.explanation,
+    difficultyLevel: body.difficulty_level,
+    difficultyScore: body.difficulty_score,
+    estimatedTimeSeconds: body.estimated_time_seconds,
+    isActive: body.is_active,
+  };
+}
+
+function buildAdminAnswer(questionId, answer) {
+  const timestamp = new Date().toISOString();
+  return {
+    id: answer.id ?? nextAnswerId(),
+    questionId,
+    answerText: answer.answer_text,
+    isCorrect: answer.is_correct,
+    displayOrder: answer.display_order,
+    explanation: answer.explanation ?? undefined,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function nextQuestionId() {
+  return Math.max(0, ...store.questions.map((question) => question.id)) + 1;
+}
+
+function nextAnswerId() {
+  return Math.max(0, ...store.answers.map((answer) => answer.id)) + 1;
+}
+
+function assignAnswerIds(answers) {
+  let nextId = nextAnswerId();
+  return answers.map((answer) => ({
+    ...answer,
+    id: answer.id ?? nextId++,
+  }));
+}
+
+function logAdminAction(userId, action, questionId) {
+  store.adminActionLogs.unshift({ id: crypto.randomUUID(), userId, action, questionId, createdAt: new Date().toISOString() });
+}
+
+async function persistAdminQuestion(question, answersToPersist, updateExisting = false) {
+  if (!isDatabaseAvailable()) return;
+  const timestamp = toMysqlDate(question.updatedAt);
+  if (updateExisting) {
+    await insert(
+      `UPDATE questions
+       SET skill=?, part=?, question_type=?, question_text=?, passage_text=?, transcript=?, audio_url=?, image_url=?,
+           explanation=?, difficulty_level=?, difficulty_score=?, estimated_time_seconds=?, is_active=?, updated_at=?
+       WHERE id=?`,
+      [
+        question.skill,
+        question.part,
+        question.questionType,
+        question.questionText ?? null,
+        question.passageText ?? null,
+        question.transcript ?? null,
+        question.audioUrl ?? null,
+        question.imageUrl ?? null,
+        question.explanation,
+        question.difficultyLevel,
+        question.difficultyScore,
+        question.estimatedTimeSeconds,
+        question.isActive,
+        timestamp,
+        question.id,
+      ],
+    );
+  } else {
+    await insert(
+      `INSERT INTO questions (
+        id, skill, part, question_type, question_text, passage_text, transcript, audio_url, image_url,
+        explanation, difficulty_level, difficulty_score, estimated_time_seconds, is_active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        question.id,
+        question.skill,
+        question.part,
+        question.questionType,
+        question.questionText ?? null,
+        question.passageText ?? null,
+        question.transcript ?? null,
+        question.audioUrl ?? null,
+        question.imageUrl ?? null,
+        question.explanation,
+        question.difficultyLevel,
+        question.difficultyScore,
+        question.estimatedTimeSeconds,
+        question.isActive,
+        toMysqlDate(question.createdAt),
+        timestamp,
+      ],
+    );
+  }
+
+  if (answersToPersist) {
+    await insert("DELETE FROM answers WHERE question_id=?", [question.id]);
+    for (const answer of store.answers.filter((item) => item.questionId === question.id)) {
+      await insert(
+        `INSERT INTO answers (id, question_id, answer_text, is_correct, display_order, explanation, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          answer.id,
+          answer.questionId,
+          answer.answerText,
+          answer.isCorrect,
+          answer.displayOrder,
+          answer.explanation ?? null,
+          toMysqlDate(answer.createdAt),
+          toMysqlDate(answer.updatedAt),
+        ],
+      );
+    }
+  }
 }
 
 async function persistUser(user) {
