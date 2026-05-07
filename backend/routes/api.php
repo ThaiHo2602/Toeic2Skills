@@ -4,11 +4,13 @@ use App\Http\Controllers\Api\AdminQuestionController;
 use App\Http\Controllers\Api\AdminMediaController;
 use App\Http\Controllers\Api\AttemptController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BookmarkController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\FeatureController;
 use App\Http\Controllers\Api\PlanController;
 use App\Http\Controllers\Api\PracticeController;
 use App\Http\Controllers\Api\SubscriptionController;
+use App\Http\Controllers\Api\VocabularyItemController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('throttle:60,1')->group(function () {
@@ -31,6 +33,12 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
     Route::post('/subscriptions/subscribe', [SubscriptionController::class, 'subscribe'])->middleware('throttle:10,1');
     Route::post('/subscriptions/cancel', [SubscriptionController::class, 'cancel']);
     Route::get('/features/{featureKey}/access', [FeatureController::class, 'access']);
+    Route::get('/bookmarks', [BookmarkController::class, 'index']);
+    Route::post('/bookmarks', [BookmarkController::class, 'store']);
+    Route::delete('/bookmarks/{questionId}', [BookmarkController::class, 'destroy']);
+    Route::get('/vocabulary-items', [VocabularyItemController::class, 'index']);
+    Route::post('/vocabulary-items', [VocabularyItemController::class, 'store']);
+    Route::delete('/vocabulary-items/{vocabularyItem}', [VocabularyItemController::class, 'destroy']);
 
     Route::post('/practice/start', [PracticeController::class, 'start'])->middleware(['daily.test.limit', 'throttle:20,1']);
     Route::post('/tests/start', [PracticeController::class, 'start'])->middleware(['daily.test.limit', 'throttle:20,1']);

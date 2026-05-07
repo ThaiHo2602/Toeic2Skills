@@ -1,4 +1,4 @@
-import type { Answer, AttemptMode, AppState, PlanSlug, Question, Skill, Stat, UserAnswer, UserAttempt, Weakness } from "../types";
+import type { Answer, AttemptMode, AppState, Bookmark, PlanSlug, Question, Skill, Stat, UserAnswer, UserAttempt, VocabularyCollectionItem, Weakness } from "../types";
 
 const API_BASE_URL = ((import.meta as unknown as { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL) ?? "http://127.0.0.1:8000/api";
 const API_TOKEN_KEY = "toeic2skills-api-token";
@@ -77,6 +77,34 @@ export function getSubscriptionApi() {
 
 export function getDashboardApi() {
   return apiRequest<ApiDashboardResponse>("/dashboard");
+}
+
+export function getBookmarksApi() {
+  return apiRequest<{ success: true; bookmarks: ApiBookmark[] }>("/bookmarks");
+}
+
+export function saveBookmarkApi(questionId: number, note?: string) {
+  return apiRequest<{ success: true; bookmark: ApiBookmark }>("/bookmarks", { method: "POST", json: { question_id: questionId, note: note ?? null } });
+}
+
+export function deleteBookmarkApi(questionId: number) {
+  return apiRequest<{ success: true }>(`/bookmarks/${questionId}`, { method: "DELETE" });
+}
+
+export function getVocabularyItemsApi() {
+  return apiRequest<{ success: true; items: ApiVocabularyItem[] }>("/vocabulary-items");
+}
+
+export function saveVocabularyItemApi(payload: { word: string; meaning?: string; level?: string; questionId?: number }) {
+  return apiRequest<{ success: true; item: ApiVocabularyItem }>("/vocabulary-items", {
+    method: "POST",
+    json: {
+      word: payload.word,
+      meaning: payload.meaning ?? null,
+      source: payload.level ?? "practice",
+      question_id: payload.questionId ?? null,
+    },
+  });
 }
 
 export function subscribeApi(planSlug: PlanSlug) {
@@ -299,6 +327,38 @@ export function applyDashboardToState(state: AppState, response: ApiDashboardRes
   };
 }
 
+export async function getLearningToolsApi() {
+  const [bookmarks, vocabulary] = await Promise.all([getBookmarksApi(), getVocabularyItemsApi()]);
+  return {
+    bookmarks: bookmarks.bookmarks.map(mapApiBookmark),
+    vocabularyCollection: vocabulary.items.map((item) => mapApiVocabularyItem(item)),
+  };
+}
+
+export function mapApiBookmark(bookmark: ApiBookmark): Bookmark {
+  return {
+    questionId: bookmark.question_id,
+    note: bookmark.note ?? undefined,
+    createdAt: bookmark.created_at,
+  };
+}
+
+export function mapApiVocabularyItem(item: ApiVocabularyItem): VocabularyCollectionItem {
+  return {
+    id: String(item.id),
+    userId: String(item.user_id),
+    word: item.word,
+    meaning: item.meaning ?? "",
+    level: item.source ?? "TOEIC",
+    sourceQuestionId: item.question_id ?? undefined,
+    part: item.part ?? undefined,
+    topicId: item.topic_id ?? undefined,
+    createdAt: item.created_at,
+    lastReviewedAt: item.updated_at,
+    mastery: 0,
+  };
+}
+
 function mapApiStat(stat: ApiStat, estimatedScore?: number): Stat {
   return {
     levelScore: stat.level_score,
@@ -411,6 +471,29 @@ export interface ApiDashboardResponse {
   part_stats: Record<string, ApiStat>;
   weaknesses: Array<ApiStat & { part: number }>;
   recent_attempts: ApiAttempt[];
+}
+
+export interface ApiBookmark {
+  id: number;
+  user_id: number;
+  question_id: number;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiVocabularyItem {
+  id: number;
+  user_id: number;
+  question_id: number | null;
+  word: string;
+  meaning: string | null;
+  example?: string | null;
+  source: string | null;
+  part?: number | null;
+  topic_id?: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ApiStat {

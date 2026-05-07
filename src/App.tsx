@@ -41,10 +41,12 @@ import {
   clearApiToken,
   createAdminQuestionApi,
   extractAdminQuestions,
+  deleteBookmarkApi,
   getAdminQuestionsApi,
   getApiToken,
   getCurrentUserApi,
   getDashboardApi,
+  getLearningToolsApi,
   getSubscriptionApi,
   loginApi,
   logoutApi,
@@ -55,6 +57,8 @@ import {
   mapApiUser,
   mapSubscriptionSummary,
   registerApi,
+  saveBookmarkApi,
+  saveVocabularyItemApi,
   setApiToken,
   startPracticeApi,
   startTestApi,
@@ -174,12 +178,13 @@ function App() {
 
   useEffect(() => {
     if (!getApiToken()) return;
-    Promise.all([getCurrentUserApi(), getSubscriptionApi(), getDashboardApi().catch(() => null)])
-      .then(([userResponse, subscriptionResponse, dashboardResponse]) => {
+    Promise.all([getCurrentUserApi(), getSubscriptionApi(), getDashboardApi().catch(() => null), getLearningToolsApi().catch(() => null)])
+      .then(([userResponse, subscriptionResponse, dashboardResponse, toolsResponse]) => {
         const apiUser = mapApiUser(userResponse.user);
         setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
         setState((current) => ({
           ...(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current),
+          ...(toolsResponse ? toolsResponse : {}),
           auth: { ...current.auth, isAuthenticated: true, onboardingCompleted: apiUser.role === "admin" ? true : current.auth.onboardingCompleted },
           user: { ...current.user, ...apiUser },
         }));
@@ -406,17 +411,26 @@ function App() {
     setView("progress");
   }
 
-  function toggleBookmark(questionId: number) {
+  async function toggleBookmark(questionId: number) {
     const exists = state.bookmarks.some((bookmark) => bookmark.questionId === questionId);
-    setState({
-      ...state,
-      bookmarks: exists
-        ? state.bookmarks.filter((bookmark) => bookmark.questionId !== questionId)
-        : [{ questionId, createdAt: new Date().toISOString() }, ...state.bookmarks],
-    });
+    const nextBookmarks = exists
+      ? state.bookmarks.filter((bookmark) => bookmark.questionId !== questionId)
+      : [{ questionId, createdAt: new Date().toISOString() }, ...state.bookmarks];
+
+    setState({ ...state, bookmarks: nextBookmarks });
+
+    try {
+      if (exists) {
+        await deleteBookmarkApi(questionId);
+      } else {
+        await saveBookmarkApi(questionId);
+      }
+    } catch (error) {
+      console.warn("Bookmark API unavailable, keeping local bookmark state.", error);
+    }
   }
 
-  function saveVocabularyFromQuestion(question: Question, item: { word: string; meaning: string; level: string }) {
+  async function saveVocabularyFromQuestion(question: Question, item: { word: string; meaning: string; level: string }) {
     const normalizedWord = item.word.trim().toLowerCase();
     const exists = state.vocabularyCollection.some((entry) => entry.word.toLowerCase() === normalizedWord);
     if (exists) return;
@@ -434,10 +448,30 @@ function App() {
       mastery: 0,
     };
 
-    setState({
-      ...state,
-      vocabularyCollection: [entry, ...state.vocabularyCollection],
-    });
+    setState({ ...state, vocabularyCollection: [entry, ...state.vocabularyCollection] });
+
+    try {
+      const response = await saveVocabularyItemApi({
+        word: item.word.trim(),
+        meaning: item.meaning.trim(),
+        level: item.level,
+        questionId: question.id,
+      });
+      setState((current) => ({
+        ...current,
+        vocabularyCollection: current.vocabularyCollection.map((vocab) =>
+          vocab.id === entry.id
+            ? {
+                ...vocab,
+                id: String(response.item.id),
+                createdAt: response.item.created_at,
+              }
+            : vocab,
+        ),
+      }));
+    } catch (error) {
+      console.warn("Vocabulary API unavailable, keeping local vocabulary item.", error);
+    }
   }
 
   function checkFeature(featureKey: FeatureKey) {
@@ -532,8 +566,10 @@ function App() {
       const subscriptionResponse = await getSubscriptionApi().catch(() => null);
       if (subscriptionResponse) setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
       const dashboardResponse = await getDashboardApi().catch(() => null);
+      const toolsResponse = await getLearningToolsApi().catch(() => null);
       setState((current) => ({
         ...(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current),
+        ...(toolsResponse ? toolsResponse : {}),
         auth: {
           ...current.auth,
           isAuthenticated: true,
