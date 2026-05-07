@@ -4,13 +4,17 @@ use App\Http\Controllers\Api\AdminQuestionController;
 use App\Http\Controllers\Api\AdminMediaController;
 use App\Http\Controllers\Api\AdminQuestionGroupController;
 use App\Http\Controllers\Api\AdminTestSetController;
+use App\Http\Controllers\Api\AiExplanationController;
+use App\Http\Controllers\Api\AnalysisController;
 use App\Http\Controllers\Api\AttemptController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BookmarkController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\FeatureController;
+use App\Http\Controllers\Api\MetadataController;
 use App\Http\Controllers\Api\PlanController;
 use App\Http\Controllers\Api\PracticeController;
+use App\Http\Controllers\Api\RecommendationController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\TestSetController;
 use App\Http\Controllers\Api\VocabularyItemController;
@@ -34,6 +38,7 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'summary']);
     Route::get('/attempts', [DashboardController::class, 'attempts']);
     Route::get('/tests', [TestSetController::class, 'index']);
+    Route::get('/metadata', [MetadataController::class, 'index']);
     Route::post('/subscriptions/subscribe', [SubscriptionController::class, 'subscribe'])->middleware('throttle:10,1');
     Route::post('/subscriptions/cancel', [SubscriptionController::class, 'cancel']);
     Route::get('/features/{featureKey}/access', [FeatureController::class, 'access']);
@@ -53,10 +58,10 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
     Route::post('/attempts/{attempt}/submit', [AttemptController::class, 'submit'])->middleware('throttle:30,1');
     Route::get('/attempts/{attempt}/result', [AttemptController::class, 'result']);
 
-    Route::get('/analysis/weaknesses', fn () => response()->json(['success' => true, 'weaknesses' => []]))->middleware('premium.feature:weakness_analysis');
-    Route::get('/recommendations', fn () => response()->json(['success' => true, 'recommendations' => []]))->middleware('premium.feature:recommendations');
+    Route::get('/analysis/weaknesses', [AnalysisController::class, 'weaknesses'])->middleware('premium.feature:weakness_analysis');
+    Route::get('/recommendations', [RecommendationController::class, 'index'])->middleware('premium.feature:recommendations');
     Route::get('/dashboard/advanced', fn () => response()->json(['success' => true, 'dashboard' => []]))->middleware('premium.feature:advanced_dashboard');
-    Route::post('/ai/explain', fn () => response()->json(['success' => true, 'explanation' => null, 'mock' => true]))->middleware(['premium.feature:ai_explanation', 'throttle:10,1']);
+    Route::post('/ai/explain', [AiExplanationController::class, 'explain'])->middleware(['premium.feature:ai_explanation', 'throttle:10,1']);
 
     Route::middleware('admin')->prefix('admin')->group(function () {
         Route::post('media', [AdminMediaController::class, 'store'])->middleware('throttle:20,1');

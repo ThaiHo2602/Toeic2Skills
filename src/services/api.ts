@@ -1,4 +1,4 @@
-import type { Answer, AttemptMode, AppState, Bookmark, PlanSlug, Question, Skill, Stat, UserAnswer, UserAttempt, VocabularyCollectionItem, Weakness } from "../types";
+import type { Answer, AttemptMode, AppState, Bookmark, GrammarPoint, Plan, PlanSlug, Question, QuestionGroup, Skill, Stat, Topic, UserAnswer, UserAttempt, VocabularyCollectionItem, Weakness } from "../types";
 
 const API_BASE_URL = ((import.meta as unknown as { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL) ?? "http://127.0.0.1:8000/api";
 const API_TOKEN_KEY = "toeic2skills-api-token";
@@ -75,8 +75,31 @@ export function getSubscriptionApi() {
   return apiRequest<ApiSubscriptionSummary>("/me/subscription");
 }
 
+export function getPlansApi() {
+  return apiRequest<{ success: true; plans: ApiPlan[] }>("/plans");
+}
+
 export function getDashboardApi() {
   return apiRequest<ApiDashboardResponse>("/dashboard");
+}
+
+export function getMetadataApi() {
+  return apiRequest<ApiMetadataResponse>("/metadata");
+}
+
+export function getWeaknessAnalysisApi() {
+  return apiRequest<{ success: true; weaknesses: ApiWeakness[] }>("/analysis/weaknesses");
+}
+
+export function getRecommendationsApi() {
+  return apiRequest<{ success: true; recommendations: ApiRecommendation[] }>("/recommendations");
+}
+
+export function explainQuestionApi(questionId: number, selectedAnswerId?: number) {
+  return apiRequest<{ success: true; explanation: ApiAiExplanation }>("/ai/explain", {
+    method: "POST",
+    json: { question_id: questionId, selected_answer_id: selectedAnswerId ?? null },
+  });
 }
 
 export function getBookmarksApi() {
@@ -379,6 +402,22 @@ export function applyDashboardToState(state: AppState, response: ApiDashboardRes
   };
 }
 
+export function applyPlansToState(state: AppState, response: { plans: ApiPlan[] }): AppState {
+  return {
+    ...state,
+    plans: response.plans.map(mapApiPlan),
+  };
+}
+
+export function applyMetadataToState(state: AppState, response: ApiMetadataResponse): AppState {
+  return {
+    ...state,
+    topics: response.topics.map(mapApiTopic),
+    grammarPoints: response.grammar_points.map(mapApiGrammarPoint),
+    questionGroups: response.question_groups.map(mapApiQuestionGroup),
+  };
+}
+
 export async function getLearningToolsApi() {
   const [bookmarks, vocabulary] = await Promise.all([getBookmarksApi(), getVocabularyItemsApi()]);
   return {
@@ -464,6 +503,59 @@ export function mapSubscriptionSummary(response: ApiSubscriptionSummary) {
   };
 }
 
+export function mapApiPlan(plan: ApiPlan): Plan {
+  return {
+    id: plan.id,
+    name: plan.name,
+    slug: plan.slug,
+    price: plan.price,
+    currency: plan.currency,
+    durationDays: plan.duration_days,
+    dailyTestLimit: plan.daily_test_limit,
+    aiExplanationLimit: plan.ai_explanation_limit,
+    hasAiFeatures: Boolean(plan.has_ai_features),
+    hasWeaknessAnalysis: Boolean(plan.has_weakness_analysis),
+    hasAdaptiveLearning: Boolean(plan.has_adaptive_learning),
+    hasAdvancedDashboard: Boolean(plan.has_advanced_dashboard),
+    isActive: Boolean(plan.is_active),
+    createdAt: plan.created_at,
+    updatedAt: plan.updated_at,
+  };
+}
+
+function mapApiTopic(topic: ApiTopic): Topic {
+  return {
+    id: topic.id,
+    name: topic.name,
+    skill: topic.skill,
+    description: topic.description ?? undefined,
+  };
+}
+
+function mapApiGrammarPoint(grammar: ApiGrammarPoint): GrammarPoint {
+  return {
+    id: grammar.id,
+    name: grammar.name,
+    category: grammar.category ?? "Grammar",
+    description: grammar.description ?? undefined,
+  };
+}
+
+function mapApiQuestionGroup(group: ApiQuestionGroup): QuestionGroup {
+  return {
+    id: group.id,
+    skill: group.skill,
+    part: group.part,
+    title: group.title ?? group.group_type,
+    groupType: group.group_type,
+    passageText: group.passage_text ?? undefined,
+    transcript: group.transcript ?? undefined,
+    audioUrl: group.audio_url ?? undefined,
+    imageUrl: group.image_url ?? undefined,
+    source: group.source ?? undefined,
+  };
+}
+
 export interface ApiUser {
   id: string | number;
   name: string;
@@ -484,6 +576,77 @@ export interface ApiSubscriptionSummary {
   used_tests_today: number;
   remaining_tests_today: number | null;
   features: Record<string, boolean>;
+}
+
+export interface ApiPlan {
+  id: number;
+  name: string;
+  slug: PlanSlug;
+  price: number;
+  currency: string;
+  duration_days: number | null;
+  daily_test_limit: number | null;
+  ai_explanation_limit: number | null;
+  has_ai_features: boolean;
+  has_weakness_analysis: boolean;
+  has_adaptive_learning: boolean;
+  has_advanced_dashboard: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiMetadataResponse {
+  success: true;
+  topics: ApiTopic[];
+  grammar_points: ApiGrammarPoint[];
+  question_groups: ApiQuestionGroup[];
+}
+
+export interface ApiTopic {
+  id: number;
+  name: string;
+  skill: Skill | "both";
+  description?: string | null;
+}
+
+export interface ApiGrammarPoint {
+  id: number;
+  name: string;
+  category?: string | null;
+  description?: string | null;
+}
+
+export interface ApiWeakness {
+  id: number;
+  weakness_type: "part" | "topic" | "grammar";
+  skill: Skill;
+  part?: number | null;
+  topic_id?: number | null;
+  grammar_point_id?: number | null;
+  severity_score: number;
+  accuracy: number;
+  sample_size: number;
+  last_detected_at: string;
+}
+
+export interface ApiRecommendation {
+  type: "practice" | "review";
+  title: string;
+  skill: Skill;
+  part: number;
+  question_count: number;
+  reason: string;
+  severity_score: number;
+}
+
+export interface ApiAiExplanation {
+  question_id: number;
+  summary: string;
+  correct_answer?: { id: number; text: string } | null;
+  selected_answer?: { id: number; text: string } | null;
+  study_tip: string;
+  source: string;
 }
 
 export interface ApiStartAttemptResponse {

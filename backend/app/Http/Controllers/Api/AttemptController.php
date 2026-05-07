@@ -7,19 +7,33 @@ use App\Models\Answer;
 use App\Models\Attempt;
 use App\Models\UserAnswer;
 use App\Services\ScoringService;
+use App\Services\SubscriptionService;
+use App\Services\UserPerformanceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class AttemptController extends Controller
 {
-    public function __construct(private readonly ScoringService $scoring)
+    public function __construct(
+        private readonly ScoringService $scoring,
+        private readonly UserPerformanceService $performance,
+        private readonly SubscriptionService $subscriptions,
+    )
     {
     }
 
     public function show(Request $request, Attempt $attempt)
     {
         $this->authorizeAttempt($request, $attempt);
-        return response()->json(['success' => true, 'attempt' => $attempt->load('questions.answers')]);
+        $attempt->load('questions.answers', 'questions.group');
+
+        return response()->json([
+            'success' => true,
+            'attempt' => $attempt,
+            'questions' => $attempt->questions->map(fn ($question) => $attempt->status === 'in_progress'
+                ? $this->questionForTaking($question)
+                : $question)->values(),
+        ]);
     }
 
     public function answer(Request $request, Attempt $attempt)
@@ -80,6 +94,7 @@ class AttemptController extends Controller
                 'duration_seconds' => max(0, (int) abs(now()->diffInSeconds($attempt->started_at))),
                 ...$score,
             ]);
+            $this->performance->refreshAfterSubmit($attempt->refresh());
         });
 
         return $this->result($request, $attempt->refresh());
@@ -109,11 +124,51 @@ class AttemptController extends Controller
                     'time_spent_seconds' => $userAnswer?->time_spent_seconds,
                 ];
             })->values(),
+            'locked_features' => $this->subscriptions->isPremium($request->user()) ? [] : [
+                ['feature' => 'weakness_analysis', 'message' => 'Nâng cấp Premium để xem phân tích điểm yếu.'],
+                ['feature' => 'recommendations', 'message' => 'Nâng cấp Premium để nhận lộ trình ôn tập cá nhân hóa.'],
+                ['feature' => 'ai_explanation', 'message' => 'Nâng cấp Premium để xem giải thích bằng AI.'],
+            ],
         ]);
     }
 
     private function authorizeAttempt(Request $request, Attempt $attempt): void
     {
         abort_unless($attempt->user_id === $request->user()->id || $request->user()->isAdmin(), 403);
+    }
+
+    private function questionForTaking($question): array
+    {
+        return [
+            'id' => $question->id,
+            'question_group_id' => $question->question_group_id,
+            'skill' => $question->skill,
+            'part' => $question->part,
+            'question_type' => $question->question_type,
+            'question_text' => $question->question_text,
+            'passage_text' => $question->passage_text,
+            'transcript' => null,
+            'audio_url' => $question->audio_url,
+            'image_url' => $question->image_url,
+            'estimated_time_seconds' => $question->estimated_time_seconds,
+            'group' => $question->group ? [
+                'id' => $question->group->id,
+                'skill' => $question->group->skill,
+                'part' => $question->group->part,
+                'title' => $question->group->title,
+                'group_type' => $question->group->group_type,
+                'passage_text' => $question->group->passage_text,
+                'transcript' => null,
+                'audio_url' => $question->group->audio_url,
+                'image_url' => $question->group->image_url,
+            ] : null,
+            'answers' => $question->answers->map(fn ($answer) => [
+                'id' => $answer->id,
+                'question_id' => $answer->question_id,
+                'answer_text' => $answer->answer_text,
+                'answer_audio_url' => $answer->answer_audio_url,
+                'display_order' => $answer->display_order,
+            ])->values(),
+        ];
     }
 }

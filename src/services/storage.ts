@@ -1,4 +1,4 @@
-import { questions as seedQuestions } from "../data";
+import { grammarPoints as seedGrammarPoints, questionGroups as seedQuestionGroups, questions as seedQuestions, topics as seedTopics } from "../data";
 import type { AppState, Skill, Stat, UserAttempt, UserProfile, Weakness } from "../types";
 import { calculateEstimatedToeicScore, calculateLevelDelta, updateQuestionDifficulty } from "./scoring";
 import { partKey } from "./adaptive";
@@ -35,6 +35,9 @@ export function createInitialState(): AppState {
     },
     user: defaultUser,
     plans: seedPlans,
+    topics: seedTopics,
+    grammarPoints: seedGrammarPoints,
+    questionGroups: seedQuestionGroups,
     subscriptions: [],
     userDailyUsages: [],
     featureAccessLogs: [],
@@ -62,6 +65,9 @@ export function loadState(): AppState {
       ...parsed,
       auth: parsed.auth ?? createInitialState().auth,
       plans: parsed.plans?.length ? parsed.plans : seedPlans,
+      topics: parsed.topics?.length ? parsed.topics : seedTopics,
+      grammarPoints: parsed.grammarPoints?.length ? parsed.grammarPoints : seedGrammarPoints,
+      questionGroups: parsed.questionGroups?.length ? parsed.questionGroups : seedQuestionGroups,
       subscriptions: parsed.subscriptions ?? [],
       userDailyUsages: parsed.userDailyUsages ?? [],
       featureAccessLogs: parsed.featureAccessLogs ?? [],

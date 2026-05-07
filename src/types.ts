@@ -238,6 +238,9 @@ export interface AppState {
   auth: AuthState;
   user: UserProfile;
   plans: Plan[];
+  topics: Topic[];
+  grammarPoints: GrammarPoint[];
+  questionGroups: QuestionGroup[];
   subscriptions: Subscription[];
   userDailyUsages: UserDailyUsage[];
   featureAccessLogs: FeatureAccessLog[];

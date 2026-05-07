@@ -37,6 +37,8 @@ import { generateAdaptivePractice, generateStandardPractice, generateTestQuestio
 import {
   ApiError,
   applyDashboardToState,
+  applyMetadataToState,
+  applyPlansToState,
   cancelSubscriptionApi,
   clearApiToken,
   createAdminQuestionApi,
@@ -52,6 +54,8 @@ import {
   getCurrentUserApi,
   getDashboardApi,
   getLearningToolsApi,
+  getMetadataApi,
+  getPlansApi,
   getSubscriptionApi,
   getTestSetsApi,
   importAdminQuestionsApi,
@@ -188,13 +192,21 @@ function App() {
 
   useEffect(() => {
     if (!getApiToken()) return;
-    Promise.all([getCurrentUserApi(), getSubscriptionApi(), getDashboardApi().catch(() => null), getLearningToolsApi().catch(() => null), getTestSetsApi().catch(() => null)])
-      .then(([userResponse, subscriptionResponse, dashboardResponse, toolsResponse, testSetsResponse]) => {
+    Promise.all([
+      getCurrentUserApi(),
+      getSubscriptionApi(),
+      getDashboardApi().catch(() => null),
+      getLearningToolsApi().catch(() => null),
+      getTestSetsApi().catch(() => null),
+      getPlansApi().catch(() => null),
+      getMetadataApi().catch(() => null),
+    ])
+      .then(([userResponse, subscriptionResponse, dashboardResponse, toolsResponse, testSetsResponse, plansResponse, metadataResponse]) => {
         const apiUser = mapApiUser(userResponse.user);
         setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
         if (testSetsResponse) setTestSets(testSetsResponse.test_sets);
         setState((current) => ({
-          ...(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current),
+          ...(metadataResponse ? applyMetadataToState(plansResponse ? applyPlansToState(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current, plansResponse) : dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current, metadataResponse) : plansResponse ? applyPlansToState(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current, plansResponse) : dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current),
           ...(toolsResponse ? toolsResponse : {}),
           auth: { ...current.auth, isAuthenticated: true, onboardingCompleted: apiUser.role === "admin" ? true : current.auth.onboardingCompleted },
           user: { ...current.user, ...apiUser },
@@ -578,8 +590,12 @@ function App() {
       if (subscriptionResponse) setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
       const dashboardResponse = await getDashboardApi().catch(() => null);
       const toolsResponse = await getLearningToolsApi().catch(() => null);
+      const plansResponse = await getPlansApi().catch(() => null);
+      const metadataResponse = await getMetadataApi().catch(() => null);
+      const testSetsResponse = await getTestSetsApi().catch(() => null);
+      if (testSetsResponse) setTestSets(testSetsResponse.test_sets);
       setState((current) => ({
-        ...(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current),
+        ...(metadataResponse ? applyMetadataToState(plansResponse ? applyPlansToState(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current, plansResponse) : dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current, metadataResponse) : plansResponse ? applyPlansToState(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current, plansResponse) : dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current),
         ...(toolsResponse ? toolsResponse : {}),
         auth: {
           ...current.auth,
