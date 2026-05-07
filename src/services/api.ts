@@ -1,6 +1,7 @@
 import type { Answer, AttemptMode, PlanSlug, Question, Skill, UserAttempt } from "../types";
 
 const API_BASE_URL = ((import.meta as unknown as { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL) ?? "http://127.0.0.1:8000/api";
+const API_TOKEN_KEY = "toeic2skills-api-token";
 
 type ApiOptions = RequestInit & {
   json?: unknown;
@@ -20,11 +21,14 @@ export class ApiError extends Error {
 }
 
 export async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const token = getApiToken();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     credentials: "include",
     headers: {
+      Accept: "application/json",
       ...(options.json ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
     body: options.json ? JSON.stringify(options.json) : options.body,
@@ -36,12 +40,35 @@ export async function apiRequest<T>(path: string, options: ApiOptions = {}): Pro
   return payload as T;
 }
 
+export function getApiToken() {
+  return localStorage.getItem(API_TOKEN_KEY);
+}
+
+export function setApiToken(token: string) {
+  localStorage.setItem(API_TOKEN_KEY, token);
+}
+
+export function clearApiToken() {
+  localStorage.removeItem(API_TOKEN_KEY);
+}
+
 export function loginApi(email: string, password: string) {
-  return apiRequest<{ success: true; user: ApiUser }>("/auth/login", { method: "POST", json: { email, password } });
+  return apiRequest<{ success: true; token: string; user: ApiUser }>("/auth/login", { method: "POST", json: { email, password } });
 }
 
 export function registerApi(name: string, email: string, password: string) {
-  return apiRequest<{ success: true; user: ApiUser }>("/auth/register", { method: "POST", json: { name, email, password } });
+  return apiRequest<{ success: true; token: string; user: ApiUser }>("/auth/register", {
+    method: "POST",
+    json: { name, email, password, password_confirmation: password },
+  });
+}
+
+export function logoutApi() {
+  return apiRequest<{ success: true }>("/auth/logout", { method: "POST" });
+}
+
+export function getCurrentUserApi() {
+  return apiRequest<{ success: true; user: ApiUser }>("/auth/me");
 }
 
 export function getSubscriptionApi() {
@@ -65,8 +92,7 @@ export function startPracticeApi(part: number, questionCount: number, adaptive =
 }
 
 export function startTestApi(mode: "mini_test" | "full_test" | "placement") {
-  const path = mode === "full_test" ? "/full-tests/start" : mode === "mini_test" ? "/mini-tests/start" : "/tests/start";
-  return apiRequest<ApiStartAttemptResponse>(path, { method: "POST" });
+  return apiRequest<ApiStartAttemptResponse>("/tests/start", { method: "POST", json: { mode, skill: "both" } });
 }
 
 export function submitAttemptApi(attempt: UserAttempt) {
@@ -82,7 +108,7 @@ export function submitAttemptApi(attempt: UserAttempt) {
 }
 
 export function getAdminQuestionsApi() {
-  return apiRequest<{ success: true; questions: ApiAdminQuestion[] }>("/admin/questions");
+  return apiRequest<{ success: true; questions: ApiAdminQuestion[] | { data: ApiAdminQuestion[] } }>("/admin/questions");
 }
 
 export function createAdminQuestionApi(question: Question) {
@@ -104,17 +130,12 @@ export function deleteAdminQuestionApi(questionId: number) {
 }
 
 export async function uploadAdminMediaApi(file: File) {
-  const response = await fetch(`${API_BASE_URL}/admin/upload`, {
+  const formData = new FormData();
+  formData.append("file", file);
+  const payload = await apiRequest<{ success: true; file: { key: string; url: string; mimetype: string; size: number } }>("/admin/media", {
     method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": file.type,
-      "X-File-Name": file.name,
-    },
-    body: await file.arrayBuffer(),
+    body: formData,
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError(response.status, payload.message ?? "Upload failed.", payload.code, payload);
   return payload as { success: true; file: { key: string; url: string; mimetype: string; size: number } };
 }
 
@@ -123,20 +144,20 @@ export function mapApiQuestion(question: ApiQuestion): Question {
     id: question.id,
     skill: question.skill,
     part: question.part,
-    questionType: question.questionType,
-    questionText: question.questionText,
-    passageText: question.passageText,
+    questionType: question.questionType ?? question.question_type ?? "",
+    questionText: question.questionText ?? question.question_text,
+    passageText: question.passageText ?? question.passage_text,
     transcript: question.transcript,
-    audioUrl: question.audioUrl,
-    imageUrl: question.imageUrl,
+    audioUrl: question.audioUrl ?? question.audio_url,
+    imageUrl: question.imageUrl ?? question.image_url,
     explanation: question.explanation ?? "",
-    difficultyLevel: question.difficultyLevel,
-    difficultyScore: question.difficultyScore,
-    estimatedTimeSeconds: question.estimatedTimeSeconds,
-    correctRate: 0,
-    attemptCount: 0,
-    correctCount: 0,
-    isActive: question.isActive,
+    difficultyLevel: question.difficultyLevel ?? question.difficulty_level,
+    difficultyScore: question.difficultyScore ?? question.difficulty_score,
+    estimatedTimeSeconds: question.estimatedTimeSeconds ?? question.estimated_time_seconds,
+    correctRate: question.correctRate ?? question.correct_rate ?? 0,
+    attemptCount: question.attemptCount ?? question.attempt_count ?? 0,
+    correctCount: question.correctCount ?? question.correct_count ?? 0,
+    isActive: question.isActive ?? question.is_active,
   };
 }
 
@@ -150,10 +171,10 @@ export function mapApiAdminQuestion(question: ApiAdminQuestion): Question {
     imageUrl: question.imageUrl,
     answers: question.answers?.map((answer) => ({
       id: answer.id,
-      questionId: question.id,
-      answerText: answer.answerText,
-      isCorrect: answer.isCorrect,
-      displayOrder: answer.displayOrder,
+      questionId: answer.questionId ?? answer.question_id ?? question.id,
+      answerText: answer.answerText ?? answer.answer_text,
+      isCorrect: answer.isCorrect ?? answer.is_correct,
+      displayOrder: answer.displayOrder ?? answer.display_order,
       explanation: answer.explanation,
     })),
   } as Question & { answers?: Answer[] };
@@ -187,37 +208,74 @@ function questionToAdminPayload(question: Question) {
 
 export function mapApiAttempt(attempt: ApiAttempt): UserAttempt {
   return {
-    id: attempt.id,
-    userId: attempt.userId,
+    id: String(attempt.id),
+    userId: String(attempt.userId ?? attempt.user_id),
     mode: attempt.mode,
     skill: "both",
-    status: attempt.status === "expired" ? "abandoned" : attempt.status,
-    startedAt: attempt.startedAt,
-    submittedAt: attempt.submittedAt,
+    status: attempt.status === "expired" ? "abandoned" : attempt.status === "completed" ? "submitted" : attempt.status,
+    startedAt: attempt.startedAt ?? attempt.started_at ?? new Date().toISOString(),
+    submittedAt: attempt.submittedAt ?? attempt.submitted_at,
     durationSeconds: 0,
-    questionIds: attempt.questionIds,
+    questionIds: attempt.questionIds ?? attempt.questions?.map((question) => question.id) ?? [],
     answers: [],
-    totalQuestions: attempt.totalQuestions,
-    correctCount: attempt.correctCount ?? 0,
-    accuracy: attempt.accuracy ?? 0,
-    estimatedListeningScore: attempt.estimatedListeningScore,
-    estimatedReadingScore: attempt.estimatedReadingScore,
-    estimatedTotalScore: attempt.estimatedTotalScore,
-    scoreConfidence: attempt.scoreConfidence,
+    totalQuestions: attempt.totalQuestions ?? attempt.total_questions,
+    correctCount: attempt.correctCount ?? attempt.correct_count ?? 0,
+    accuracy: Number(attempt.accuracy ?? 0),
+    estimatedListeningScore: attempt.estimatedListeningScore ?? attempt.estimated_listening_score,
+    estimatedReadingScore: attempt.estimatedReadingScore ?? attempt.estimated_reading_score,
+    estimatedTotalScore: attempt.estimatedTotalScore ?? attempt.estimated_total_score,
+    scoreConfidence: Number(attempt.scoreConfidence ?? attempt.score_confidence ?? 0),
+  };
+}
+
+export function mapApiUser(user: ApiUser) {
+  return {
+    id: String(user.id),
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    targetScore: user.targetScore ?? user.target_score ?? 650,
+  };
+}
+
+export function extractAdminQuestions(response: { questions: ApiAdminQuestion[] | { data: ApiAdminQuestion[] } }) {
+  return Array.isArray(response.questions) ? response.questions : response.questions.data;
+}
+
+export function mapSubscriptionSummary(response: ApiSubscriptionSummary) {
+  return {
+    plan: response.plan === "admin" ? ("premium_yearly" as PlanSlug) : response.plan,
+    planName: response.plan_name ?? response.plan,
+    isPremium: response.is_premium,
+    subscriptionStatus: response.subscription_status,
+    expiresAt: response.expires_at,
+    dailyTestLimit: response.daily_test_limit,
+    usedTestsToday: response.used_tests_today,
+    remainingTestsToday: response.remaining_tests_today,
+    features: {
+      ai_explanation: Boolean(response.features.ai_explanation),
+      weakness_analysis: Boolean(response.features.weakness_analysis),
+      adaptive_learning: Boolean(response.features.adaptive_learning),
+      advanced_dashboard: Boolean(response.features.advanced_dashboard),
+      unlimited_tests: response.daily_test_limit === null || Boolean(response.features.unlimited_tests),
+      recommendations: Boolean(response.features.recommendations),
+    },
   };
 }
 
 export interface ApiUser {
-  id: string;
+  id: string | number;
   name: string;
   email: string;
   role: "user" | "admin";
-  targetScore: number;
+  targetScore?: number;
+  target_score?: number;
 }
 
 export interface ApiSubscriptionSummary {
   success: true;
-  plan: PlanSlug | "free";
+  plan: PlanSlug | "free" | "admin";
+  plan_name?: string;
   is_premium: boolean;
   subscription_status: string;
   expires_at: string | null;
@@ -240,48 +298,77 @@ export interface ApiSubmitAttemptResponse {
 }
 
 export interface ApiAttempt {
-  id: string;
-  userId: string;
+  id: string | number;
+  userId?: string | number;
+  user_id?: string | number;
   mode: AttemptMode;
   adaptive?: boolean;
-  status: "in_progress" | "submitted" | "abandoned" | "expired";
-  startedAt: string;
+  status: "in_progress" | "submitted" | "completed" | "abandoned" | "expired";
+  startedAt?: string;
+  started_at?: string;
   submittedAt?: string;
-  questionIds: number[];
-  totalQuestions: number;
+  submitted_at?: string;
+  questionIds?: number[];
+  questions?: ApiQuestion[];
+  totalQuestions?: number;
+  total_questions: number;
   correctCount?: number;
+  correct_count?: number;
   accuracy?: number;
   estimatedListeningScore?: number;
+  estimated_listening_score?: number;
   estimatedReadingScore?: number;
+  estimated_reading_score?: number;
   estimatedTotalScore?: number;
+  estimated_total_score?: number;
   scoreConfidence?: number;
+  score_confidence?: number;
 }
 
 export interface ApiQuestion {
   id: number;
   skill: Skill;
   part: number;
-  questionType: string;
+  questionType?: string;
+  question_type?: string;
   questionText?: string;
+  question_text?: string;
   passageText?: string;
+  passage_text?: string;
   transcript?: string;
   audioUrl?: string;
+  audio_url?: string;
   imageUrl?: string;
+  image_url?: string;
   explanation?: string;
   difficultyLevel: "easy" | "medium" | "hard";
+  difficulty_level: "easy" | "medium" | "hard";
   difficultyScore: number;
+  difficulty_score: number;
   estimatedTimeSeconds: number;
-  isActive: boolean;
+  estimated_time_seconds: number;
+  correctRate?: number;
+  correct_rate?: number;
+  attemptCount?: number;
+  attempt_count?: number;
+  correctCount?: number;
+  correct_count?: number;
+  isActive?: boolean;
+  is_active: boolean;
 }
 
 export interface ApiAdminQuestion extends ApiQuestion {
   explanation: string;
   answers?: Array<{
     id: number;
-    questionId: number;
-    answerText: string;
-    isCorrect: boolean;
-    displayOrder: number;
+    questionId?: number;
+    question_id?: number;
+    answerText?: string;
+    answer_text: string;
+    isCorrect?: boolean;
+    is_correct: boolean;
+    displayOrder?: number;
+    display_order: number;
     explanation?: string;
   }>;
 }

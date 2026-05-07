@@ -14,7 +14,7 @@ class AuthController extends Controller
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:120'],
-            'email' => ['required', 'email:rfc,dns', 'max:190', 'unique:users,email'],
+            'email' => ['required', 'email', 'max:190', 'unique:users,email'],
             'password' => ['required', 'confirmed', Password::min(8)->letters()->numbers()],
             'target_score' => ['nullable', 'integer', 'between:10,990'],
         ]);

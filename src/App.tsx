@@ -37,13 +37,22 @@ import { generateAdaptivePractice, generateStandardPractice, generateTestQuestio
 import {
   ApiError,
   cancelSubscriptionApi,
+  clearApiToken,
   createAdminQuestionApi,
+  extractAdminQuestions,
   getAdminQuestionsApi,
+  getApiToken,
+  getCurrentUserApi,
+  getSubscriptionApi,
   loginApi,
+  logoutApi,
   mapApiAttempt,
   mapApiAdminQuestion,
   mapApiQuestion,
+  mapApiUser,
+  mapSubscriptionSummary,
   registerApi,
+  setApiToken,
   startPracticeApi,
   startTestApi,
   submitAttemptApi,
@@ -150,6 +159,7 @@ function App() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [revealedQuestionId, setRevealedQuestionId] = useState<number | null>(null);
   const [accessModal, setAccessModal] = useState<AccessDecision | null>(null);
+  const [remoteSummary, setRemoteSummary] = useState<ReturnType<typeof mapSubscriptionSummary> | null>(null);
 
   useEffect(() => {
     saveState(state);
@@ -159,10 +169,28 @@ function App() {
     saveLanguage(language);
   }, [language]);
 
+  useEffect(() => {
+    if (!getApiToken()) return;
+    Promise.all([getCurrentUserApi(), getSubscriptionApi()])
+      .then(([userResponse, subscriptionResponse]) => {
+        const apiUser = mapApiUser(userResponse.user);
+        setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
+        setState((current) => ({
+          ...current,
+          auth: { ...current.auth, isAuthenticated: true, onboardingCompleted: apiUser.role === "admin" ? true : current.auth.onboardingCompleted },
+          user: { ...current.user, ...apiUser },
+        }));
+      })
+      .catch((error) => {
+        console.warn("Saved API session is no longer valid.", error);
+        clearApiToken();
+      });
+  }, []);
+
   const t = translations[language];
   const localSummary = getSubscriptionSummary(state, state.user);
   const isAdmin = state.user.role === "admin";
-  const summary = isAdmin
+  const summary = remoteSummary ?? (isAdmin
     ? {
         ...localSummary,
         isPremium: true,
@@ -179,7 +207,7 @@ function App() {
           recommendations: true,
         },
       }
-    : localSummary;
+    : localSummary);
   const latestAttempt = state.attempts[0];
   const recentQuestionIds = state.attempts.slice(0, 5).flatMap((attempt) => attempt.answers.map((answer) => answer.questionId));
   const estimatedTotal =
@@ -194,7 +222,7 @@ function App() {
         if (cancelled) return;
         setState((current) => ({
           ...current,
-          questions: mergeQuestions(current.questions, response.questions.map(mapApiAdminQuestion)),
+          questions: mergeQuestions(current.questions, extractAdminQuestions(response).map(mapApiAdminQuestion)),
         }));
       })
       .catch((error) => {
@@ -416,6 +444,11 @@ function App() {
   async function subscribe(planSlug: PlanSlug) {
     try {
       await subscribeApi(planSlug);
+      const subscriptionResponse = await getSubscriptionApi();
+      setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
+      setAccessModal(null);
+      setView("premium");
+      return;
     } catch (error) {
       console.warn("Backend subscribe API unavailable, using local demo subscription.", error);
     }
@@ -425,6 +458,8 @@ function App() {
   }
 
   function resetDemo() {
+    clearApiToken();
+    setRemoteSummary(null);
     setState(createInitialState());
     setActiveAttempt(null);
     setCurrentIndex(0);
@@ -435,6 +470,9 @@ function App() {
   async function cancelCurrentSubscription() {
     try {
       await cancelSubscriptionApi();
+      const subscriptionResponse = await getSubscriptionApi();
+      setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
+      return;
     } catch (error) {
       console.warn("Backend cancel API unavailable, using local demo cancellation.", error);
     }
@@ -484,21 +522,22 @@ function App() {
         payload.mode === "register"
           ? await registerApi(sanitizePlainText(payload.name ?? state.user.name, 80), payload.email, payload.password)
           : await loginApi(payload.email, payload.password);
-      setState({
-        ...state,
+      setApiToken(response.token);
+      const apiUser = mapApiUser(response.user);
+      const subscriptionResponse = await getSubscriptionApi().catch(() => null);
+      if (subscriptionResponse) setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
+      setState((current) => ({
+        ...current,
         auth: {
-          ...state.auth,
+          ...current.auth,
           isAuthenticated: true,
+          onboardingCompleted: apiUser.role === "admin" ? true : current.auth.onboardingCompleted,
         },
         user: {
-          ...state.user,
-          id: response.user.id,
-          name: response.user.name,
-          email: response.user.email,
-          role: response.user.role,
-          targetScore: response.user.targetScore,
+          ...current.user,
+          ...apiUser,
         },
-      });
+      }));
       return;
     } catch (error) {
       console.warn("Backend auth API unavailable, using local demo auth.", error);
@@ -517,6 +556,15 @@ function App() {
         role: normalizeEmail(payload.email) === "admin@example.com" ? "admin" : state.user.role ?? "user",
       },
     });
+  }
+
+  async function logout() {
+    try {
+      await logoutApi();
+    } catch (error) {
+      console.warn("Backend logout API unavailable, clearing local session.", error);
+    }
+    resetDemo();
   }
 
   function completeOnboarding(targetScore: number, startPlacementAfter = false) {
@@ -567,7 +615,7 @@ function App() {
   }
 
   return (
-    <AppLayout view={view} onViewChange={setView} summary={summary} language={language} t={t} onLanguageChange={setLanguage}>
+    <AppLayout view={view} onViewChange={setView} summary={summary} language={language} t={t} onLanguageChange={setLanguage} onLogout={logout}>
       {view === "home" && (
         <HomeDashboard
           t={t}

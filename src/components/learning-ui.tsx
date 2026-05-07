@@ -43,6 +43,7 @@ export function AppLayout({
   language,
   t,
   onLanguageChange,
+  onLogout,
   children,
 }: {
   view: AppView;
@@ -51,6 +52,7 @@ export function AppLayout({
   language: Language;
   t: Translation;
   onLanguageChange: (language: Language) => void;
+  onLogout: () => void;
   children: ReactNode;
 }) {
   return (
@@ -63,6 +65,7 @@ export function AppLayout({
           t={t}
           onLanguageChange={onLanguageChange}
           onUpgrade={() => onViewChange("premium")}
+          onLogout={onLogout}
         />
         <main className="page-transition">{children}</main>
       </div>
@@ -163,12 +166,14 @@ export function Topbar({
   t,
   onLanguageChange,
   onUpgrade,
+  onLogout,
 }: {
   summary: ReturnType<typeof getSubscriptionSummary>;
   language: Language;
   t: Translation;
   onLanguageChange: (language: Language) => void;
   onUpgrade: () => void;
+  onLogout: () => void;
 }) {
   return (
     <header className="topbar-glass">
@@ -196,7 +201,7 @@ export function Topbar({
           <Bell size={18} />
           <i />
         </button>
-        <button className="avatar-button" aria-label={t.topbar.profile}>
+        <button className="avatar-button" aria-label="Logout" onClick={onLogout} title="Logout">
           <User size={18} />
         </button>
       </div>

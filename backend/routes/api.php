@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\AdminQuestionController;
+use App\Http\Controllers\Api\AdminMediaController;
 use App\Http\Controllers\Api\AttemptController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\FeatureController;
@@ -43,6 +44,7 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
     Route::post('/ai/explain', fn () => response()->json(['success' => true, 'explanation' => null, 'mock' => true]))->middleware(['premium.feature:ai_explanation', 'throttle:10,1']);
 
     Route::middleware('admin')->prefix('admin')->group(function () {
+        Route::post('media', [AdminMediaController::class, 'store'])->middleware('throttle:20,1');
         Route::apiResource('questions', AdminQuestionController::class)->except(['show']);
     });
 });
