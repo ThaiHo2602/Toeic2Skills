@@ -70,6 +70,7 @@ export interface Question {
   attemptCount: number;
   correctCount: number;
   isActive: boolean;
+  answers?: Answer[];
 }
 
 export interface UserAnswer {

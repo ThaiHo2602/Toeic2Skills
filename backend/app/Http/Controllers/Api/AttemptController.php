@@ -77,7 +77,7 @@ class AttemptController extends Controller
             $attempt->update([
                 'status' => 'completed',
                 'submitted_at' => now(),
-                'duration_seconds' => now()->diffInSeconds($attempt->started_at),
+                'duration_seconds' => max(0, (int) abs(now()->diffInSeconds($attempt->started_at))),
                 ...$score,
             ]);
         });
@@ -106,6 +106,7 @@ class AttemptController extends Controller
                     'question' => $question,
                     'selected_answer_id' => $userAnswer?->selected_answer_id,
                     'is_correct' => (bool) $userAnswer?->is_correct,
+                    'time_spent_seconds' => $userAnswer?->time_spent_seconds,
                 ];
             })->values(),
         ]);

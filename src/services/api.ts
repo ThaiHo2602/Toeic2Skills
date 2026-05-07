@@ -1,4 +1,4 @@
-import type { Answer, AttemptMode, PlanSlug, Question, Skill, UserAttempt } from "../types";
+import type { Answer, AttemptMode, PlanSlug, Question, Skill, UserAnswer, UserAttempt } from "../types";
 
 const API_BASE_URL = ((import.meta as unknown as { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL) ?? "http://127.0.0.1:8000/api";
 const API_TOKEN_KEY = "toeic2skills-api-token";
@@ -140,8 +140,9 @@ export async function uploadAdminMediaApi(file: File) {
 }
 
 export function mapApiQuestion(question: ApiQuestion): Question {
+  const questionId = question.id;
   return {
-    id: question.id,
+    id: questionId,
     skill: question.skill,
     part: question.part,
     questionType: question.questionType ?? question.question_type ?? "",
@@ -158,6 +159,7 @@ export function mapApiQuestion(question: ApiQuestion): Question {
     attemptCount: question.attemptCount ?? question.attempt_count ?? 0,
     correctCount: question.correctCount ?? question.correct_count ?? 0,
     isActive: question.isActive ?? question.is_active,
+    answers: question.answers?.map((answer) => mapApiAnswer(answer, questionId, false)),
   };
 }
 
@@ -169,15 +171,20 @@ export function mapApiAdminQuestion(question: ApiAdminQuestion): Question {
     passageText: question.passageText,
     audioUrl: question.audioUrl,
     imageUrl: question.imageUrl,
-    answers: question.answers?.map((answer) => ({
-      id: answer.id,
-      questionId: answer.questionId ?? answer.question_id ?? question.id,
-      answerText: answer.answerText ?? answer.answer_text,
-      isCorrect: answer.isCorrect ?? answer.is_correct,
-      displayOrder: answer.displayOrder ?? answer.display_order,
-      explanation: answer.explanation,
-    })),
+    answers: question.answers?.map((answer) => mapApiAnswer(answer, question.id, true)),
   } as Question & { answers?: Answer[] };
+}
+
+function mapApiAnswer(answer: ApiAnswer, questionId: number, includeCorrect: boolean): Answer {
+  return {
+    id: answer.id,
+    questionId: answer.questionId ?? answer.question_id ?? questionId,
+    answerText: answer.answerText ?? answer.answer_text,
+    answerAudioUrl: answer.answerAudioUrl ?? answer.answer_audio_url,
+    isCorrect: includeCorrect ? Boolean(answer.isCorrect ?? answer.is_correct) : false,
+    displayOrder: answer.displayOrder ?? answer.display_order,
+    explanation: answer.explanation,
+  };
 }
 
 function questionToAdminPayload(question: Question) {
@@ -225,6 +232,22 @@ export function mapApiAttempt(attempt: ApiAttempt): UserAttempt {
     estimatedReadingScore: attempt.estimatedReadingScore ?? attempt.estimated_reading_score,
     estimatedTotalScore: attempt.estimatedTotalScore ?? attempt.estimated_total_score,
     scoreConfidence: Number(attempt.scoreConfidence ?? attempt.score_confidence ?? 0),
+  };
+}
+
+export function mapApiSubmitResponse(response: ApiSubmitAttemptResponse, fallbackAnswers: UserAnswer[]): UserAttempt {
+  const attempt = mapApiAttempt(response.attempt);
+  const reviewAnswers = response.review?.map((item) => ({
+    questionId: item.question.id,
+    selectedAnswerId: item.selected_answer_id ?? undefined,
+    isCorrect: Boolean(item.is_correct),
+    timeSpentSeconds: item.time_spent_seconds ?? item.question.estimated_time_seconds ?? 0,
+    answeredAt: response.attempt.submitted_at ?? response.attempt.submittedAt ?? new Date().toISOString(),
+  }));
+
+  return {
+    ...attempt,
+    answers: reviewAnswers?.length ? reviewAnswers : fallbackAnswers,
   };
 }
 
@@ -294,6 +317,19 @@ export interface ApiStartAttemptResponse {
 export interface ApiSubmitAttemptResponse {
   success: true;
   attempt: ApiAttempt;
+  score?: {
+    listening?: number;
+    reading?: number;
+    total?: number;
+    confidence?: number;
+    label: "estimated";
+  };
+  review?: Array<{
+    question: ApiQuestion;
+    selected_answer_id: number | null;
+    is_correct: boolean;
+    time_spent_seconds?: number;
+  }>;
   locked_features?: Array<{ feature: string; message: string }>;
 }
 
@@ -355,20 +391,25 @@ export interface ApiQuestion {
   correct_count?: number;
   isActive?: boolean;
   is_active: boolean;
+  answers?: ApiAnswer[];
 }
 
 export interface ApiAdminQuestion extends ApiQuestion {
   explanation: string;
-  answers?: Array<{
-    id: number;
-    questionId?: number;
-    question_id?: number;
-    answerText?: string;
-    answer_text: string;
-    isCorrect?: boolean;
-    is_correct: boolean;
-    displayOrder?: number;
-    display_order: number;
-    explanation?: string;
-  }>;
+  answers?: ApiAnswer[];
+}
+
+export interface ApiAnswer {
+  id: number;
+  questionId?: number;
+  question_id?: number;
+  answerText?: string;
+  answer_text: string;
+  answerAudioUrl?: string;
+  answer_audio_url?: string;
+  isCorrect?: boolean;
+  is_correct?: boolean;
+  displayOrder?: number;
+  display_order: number;
+  explanation?: string;
 }

@@ -49,6 +49,7 @@ import {
   mapApiAttempt,
   mapApiAdminQuestion,
   mapApiQuestion,
+  mapApiSubmitResponse,
   mapApiUser,
   mapSubscriptionSummary,
   registerApi,
@@ -376,8 +377,7 @@ function App() {
       const response = await submitAttemptApi(activeAttempt);
       const submitted = {
         ...activeAttempt,
-        ...mapApiAttempt(response.attempt),
-        answers: activeAttempt.answers,
+        ...mapApiSubmitResponse(response, activeAttempt.answers),
         lockedFeatures: response.locked_features?.map((feature) => ({
           feature: feature.feature as FeatureKey,
           message: feature.message,
@@ -1371,7 +1371,9 @@ function PracticeQuestionCard({
   onSaveVocabulary: (question: Question, item: { word: string; meaning: string; level: string }) => void;
 }) {
   const [formulaOpen, setFormulaOpen] = useState(false);
-  const options = answers.filter((answer) => answer.questionId === question.id).sort((a, b) => a.displayOrder - b.displayOrder);
+  const options = ((question as Question & { answers?: Answer[] }).answers ?? answers.filter((answer) => answer.questionId === question.id)).sort(
+    (a, b) => a.displayOrder - b.displayOrder,
+  );
   const selected = options.find((answer) => answer.id === selectedAnswerId);
   const formula = getReadingFormula(question);
   const vocabularyItems = getVocabularyHints(question, group);
