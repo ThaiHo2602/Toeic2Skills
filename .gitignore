@@ -12,6 +12,8 @@ yarn-error.log*
 pnpm-debug.log*
 backend/.server-*.log
 backend/uploads/
+backend_laravel_tmp/
+.composer-cache/
 
 .DS_Store
 Thumbs.db
