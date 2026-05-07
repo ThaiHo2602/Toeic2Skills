@@ -1,4 +1,4 @@
-import type { Answer, AttemptMode, PlanSlug, Question, Skill, UserAnswer, UserAttempt } from "../types";
+import type { Answer, AttemptMode, AppState, PlanSlug, Question, Skill, Stat, UserAnswer, UserAttempt, Weakness } from "../types";
 
 const API_BASE_URL = ((import.meta as unknown as { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL) ?? "http://127.0.0.1:8000/api";
 const API_TOKEN_KEY = "toeic2skills-api-token";
@@ -73,6 +73,10 @@ export function getCurrentUserApi() {
 
 export function getSubscriptionApi() {
   return apiRequest<ApiSubscriptionSummary>("/me/subscription");
+}
+
+export function getDashboardApi() {
+  return apiRequest<ApiDashboardResponse>("/dashboard");
 }
 
 export function subscribeApi(planSlug: PlanSlug) {
@@ -251,6 +255,68 @@ export function mapApiSubmitResponse(response: ApiSubmitAttemptResponse, fallbac
   };
 }
 
+export function applyDashboardToState(state: AppState, response: ApiDashboardResponse): AppState {
+  const attempts = response.recent_attempts.map(mapApiAttempt);
+  const skillStats = {
+    listening: mapApiStat(response.skill_stats.listening, state.skillStats.listening?.estimatedScore),
+    reading: mapApiStat(response.skill_stats.reading, state.skillStats.reading?.estimatedScore),
+  };
+
+  const partStats = { ...state.partStats };
+  Object.entries(response.part_stats).forEach(([part, stat]) => {
+    const numericPart = Number(part);
+    const skill: Skill = numericPart <= 4 ? "listening" : "reading";
+    partStats[`${skill}-${numericPart}`] = mapApiStat(stat);
+  });
+
+  const weaknesses: Weakness[] = response.weaknesses.map((weakness) => {
+    const part = weakness.part;
+    const skill: Skill = part <= 4 ? "listening" : "reading";
+    return {
+      id: `remote-part-${part}`,
+      weaknessType: "part",
+      skill,
+      part,
+      severityScore: Math.max(1, Math.min(100, Math.round(100 - weakness.accuracy))),
+      accuracy: Math.round(weakness.accuracy),
+      sampleSize: weakness.total_answered,
+      lastDetectedAt: new Date().toISOString(),
+    };
+  });
+
+  const latest = attempts[0];
+  if (latest) {
+    skillStats.listening.estimatedScore = latest.estimatedListeningScore;
+    skillStats.reading.estimatedScore = latest.estimatedReadingScore;
+  }
+
+  return {
+    ...state,
+    attempts: mergeAttempts(state.attempts, attempts),
+    skillStats,
+    partStats,
+    weaknesses,
+  };
+}
+
+function mapApiStat(stat: ApiStat, estimatedScore?: number): Stat {
+  return {
+    levelScore: stat.level_score,
+    totalAnswered: stat.total_answered,
+    totalCorrect: stat.total_correct,
+    accuracy: Math.round(stat.accuracy),
+    estimatedScore,
+  };
+}
+
+function mergeAttempts(local: UserAttempt[], remote: UserAttempt[]) {
+  const map = new Map<string, UserAttempt>();
+  [...remote, ...local].forEach((attempt) => {
+    map.set(String(attempt.id), attempt);
+  });
+  return Array.from(map.values()).sort((a, b) => new Date(b.submittedAt ?? b.startedAt).getTime() - new Date(a.submittedAt ?? a.startedAt).getTime());
+}
+
 export function mapApiUser(user: ApiUser) {
   return {
     id: String(user.id),
@@ -331,6 +397,27 @@ export interface ApiSubmitAttemptResponse {
     time_spent_seconds?: number;
   }>;
   locked_features?: Array<{ feature: string; message: string }>;
+}
+
+export interface ApiDashboardResponse {
+  success: true;
+  estimated_score: {
+    listening: number | null;
+    reading: number | null;
+    total: number | null;
+    confidence: number | null;
+  };
+  skill_stats: Record<Skill, ApiStat>;
+  part_stats: Record<string, ApiStat>;
+  weaknesses: Array<ApiStat & { part: number }>;
+  recent_attempts: ApiAttempt[];
+}
+
+export interface ApiStat {
+  level_score: number;
+  total_answered: number;
+  total_correct: number;
+  accuracy: number;
 }
 
 export interface ApiAttempt {

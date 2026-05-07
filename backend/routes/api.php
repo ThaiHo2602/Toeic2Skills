@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\AdminQuestionController;
 use App\Http\Controllers\Api\AdminMediaController;
 use App\Http\Controllers\Api\AttemptController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\FeatureController;
 use App\Http\Controllers\Api\PlanController;
 use App\Http\Controllers\Api\PracticeController;
@@ -25,6 +26,8 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
 
     Route::get('/me/subscription', [SubscriptionController::class, 'current']);
     Route::get('/me/usage/today', [SubscriptionController::class, 'usageToday']);
+    Route::get('/dashboard', [DashboardController::class, 'summary']);
+    Route::get('/attempts', [DashboardController::class, 'attempts']);
     Route::post('/subscriptions/subscribe', [SubscriptionController::class, 'subscribe'])->middleware('throttle:10,1');
     Route::post('/subscriptions/cancel', [SubscriptionController::class, 'cancel']);
     Route::get('/features/{featureKey}/access', [FeatureController::class, 'access']);

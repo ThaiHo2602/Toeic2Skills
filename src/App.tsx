@@ -36,6 +36,7 @@ import type { AccessDecision, Answer, AppState, FeatureKey, PlanSlug, Question, 
 import { generateAdaptivePractice, generateStandardPractice, generateTestQuestions, partKey } from "./services/adaptive";
 import {
   ApiError,
+  applyDashboardToState,
   cancelSubscriptionApi,
   clearApiToken,
   createAdminQuestionApi,
@@ -43,6 +44,7 @@ import {
   getAdminQuestionsApi,
   getApiToken,
   getCurrentUserApi,
+  getDashboardApi,
   getSubscriptionApi,
   loginApi,
   logoutApi,
@@ -172,12 +174,12 @@ function App() {
 
   useEffect(() => {
     if (!getApiToken()) return;
-    Promise.all([getCurrentUserApi(), getSubscriptionApi()])
-      .then(([userResponse, subscriptionResponse]) => {
+    Promise.all([getCurrentUserApi(), getSubscriptionApi(), getDashboardApi().catch(() => null)])
+      .then(([userResponse, subscriptionResponse, dashboardResponse]) => {
         const apiUser = mapApiUser(userResponse.user);
         setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
         setState((current) => ({
-          ...current,
+          ...(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current),
           auth: { ...current.auth, isAuthenticated: true, onboardingCompleted: apiUser.role === "admin" ? true : current.auth.onboardingCompleted },
           user: { ...current.user, ...apiUser },
         }));
@@ -387,6 +389,9 @@ function App() {
         ...state,
         attempts: [submitted, ...state.attempts.filter((attempt) => attempt.id !== submitted.id)],
       });
+      getDashboardApi()
+        .then((dashboardResponse) => setState((current) => applyDashboardToState(current, dashboardResponse)))
+        .catch((error) => console.warn("Dashboard API unavailable after submit.", error));
       setActiveAttempt(null);
       setRevealedQuestionId(null);
       setView("progress");
@@ -526,8 +531,9 @@ function App() {
       const apiUser = mapApiUser(response.user);
       const subscriptionResponse = await getSubscriptionApi().catch(() => null);
       if (subscriptionResponse) setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
+      const dashboardResponse = await getDashboardApi().catch(() => null);
       setState((current) => ({
-        ...current,
+        ...(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current),
         auth: {
           ...current.auth,
           isAuthenticated: true,
