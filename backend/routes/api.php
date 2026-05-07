@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AdminQuestionController;
 use App\Http\Controllers\Api\AdminMediaController;
+use App\Http\Controllers\Api\AdminQuestionGroupController;
 use App\Http\Controllers\Api\AttemptController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BookmarkController;
@@ -56,6 +57,8 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
 
     Route::middleware('admin')->prefix('admin')->group(function () {
         Route::post('media', [AdminMediaController::class, 'store'])->middleware('throttle:20,1');
+        Route::post('questions/import', [AdminQuestionController::class, 'import'])->middleware('throttle:10,1');
+        Route::apiResource('question-groups', AdminQuestionGroupController::class)->except(['show']);
         Route::apiResource('questions', AdminQuestionController::class)->except(['show']);
     });
 });

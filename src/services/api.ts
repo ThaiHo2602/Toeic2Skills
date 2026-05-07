@@ -140,7 +140,35 @@ export function submitAttemptApi(attempt: UserAttempt) {
 }
 
 export function getAdminQuestionsApi() {
-  return apiRequest<{ success: true; questions: ApiAdminQuestion[] | { data: ApiAdminQuestion[] } }>("/admin/questions");
+  return apiRequest<{ success: true; questions: ApiAdminQuestion[] | ApiPagination<ApiAdminQuestion> }>("/admin/questions");
+}
+
+export function getAdminQuestionsFilteredApi(params: AdminQuestionFilters) {
+  const search = new URLSearchParams();
+  if (params.skill && params.skill !== "all") search.set("skill", params.skill);
+  if (params.part && params.part !== "all") search.set("part", String(params.part));
+  if (params.difficulty && params.difficulty !== "all") search.set("difficulty_level", params.difficulty);
+  if (params.q) search.set("q", params.q);
+  search.set("page", String(params.page ?? 1));
+  search.set("per_page", String(params.perPage ?? 20));
+  return apiRequest<{ success: true; questions: ApiPagination<ApiAdminQuestion> }>(`/admin/questions?${search.toString()}`);
+}
+
+export function importAdminQuestionsApi(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiRequest<{ success: true; created_count: number; errors: Array<{ row: number; message: string }> }>("/admin/questions/import", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export function getAdminQuestionGroupsApi() {
+  return apiRequest<{ success: true; groups: ApiQuestionGroup[] }>("/admin/question-groups");
+}
+
+export function createAdminQuestionGroupApi(group: QuestionGroupPayload) {
+  return apiRequest<{ success: true; group: ApiQuestionGroup }>("/admin/question-groups", { method: "POST", json: group });
 }
 
 export function createAdminQuestionApi(question: Question) {
@@ -175,14 +203,15 @@ export function mapApiQuestion(question: ApiQuestion): Question {
   const questionId = question.id;
   return {
     id: questionId,
+    questionGroupId: question.questionGroupId ?? question.question_group_id ?? question.group?.id ?? undefined,
     skill: question.skill,
     part: question.part,
     questionType: question.questionType ?? question.question_type ?? "",
     questionText: question.questionText ?? question.question_text,
-    passageText: question.passageText ?? question.passage_text,
-    transcript: question.transcript,
-    audioUrl: question.audioUrl ?? question.audio_url,
-    imageUrl: question.imageUrl ?? question.image_url,
+    passageText: question.passageText ?? question.passage_text ?? question.group?.passage_text ?? undefined,
+    transcript: question.transcript ?? question.group?.transcript ?? undefined,
+    audioUrl: question.audioUrl ?? question.audio_url ?? question.group?.audio_url ?? undefined,
+    imageUrl: question.imageUrl ?? question.image_url ?? question.group?.image_url ?? undefined,
     explanation: question.explanation ?? "",
     difficultyLevel: question.difficultyLevel ?? question.difficulty_level,
     difficultyScore: question.difficultyScore ?? question.difficulty_score,
@@ -200,9 +229,9 @@ export function mapApiAdminQuestion(question: ApiAdminQuestion): Question {
     ...mapApiQuestion(question),
     explanation: question.explanation,
     transcript: question.transcript,
-    passageText: question.passageText,
-    audioUrl: question.audioUrl,
-    imageUrl: question.imageUrl,
+    passageText: question.passageText ?? question.passage_text,
+    audioUrl: question.audioUrl ?? question.audio_url,
+    imageUrl: question.imageUrl ?? question.image_url,
     answers: question.answers?.map((answer) => mapApiAnswer(answer, question.id, true)),
   } as Question & { answers?: Answer[] };
 }
@@ -224,6 +253,7 @@ function questionToAdminPayload(question: Question) {
   return {
     skill: question.skill,
     part: question.part,
+    question_group_id: question.questionGroupId ?? null,
     question_type: question.questionType,
     question_text: question.questionText ?? "",
     passage_text: question.passageText ?? null,
@@ -387,7 +417,7 @@ export function mapApiUser(user: ApiUser) {
   };
 }
 
-export function extractAdminQuestions(response: { questions: ApiAdminQuestion[] | { data: ApiAdminQuestion[] } }) {
+export function extractAdminQuestions(response: { questions: ApiAdminQuestion[] | ApiPagination<ApiAdminQuestion> }) {
   return Array.isArray(response.questions) ? response.questions : response.questions.data;
 }
 
@@ -533,6 +563,8 @@ export interface ApiAttempt {
 
 export interface ApiQuestion {
   id: number;
+  questionGroupId?: number | null;
+  question_group_id?: number | null;
   skill: Skill;
   part: number;
   questionType?: string;
@@ -561,7 +593,51 @@ export interface ApiQuestion {
   correct_count?: number;
   isActive?: boolean;
   is_active: boolean;
+  group?: ApiQuestionGroup | null;
   answers?: ApiAnswer[];
+}
+
+export interface ApiPagination<T> {
+  data: T[];
+  current_page: number;
+  last_page: number;
+  per_page: number;
+  total: number;
+}
+
+export interface ApiQuestionGroup {
+  id: number;
+  skill: Skill;
+  part: number;
+  title?: string | null;
+  group_type: "conversation" | "talk" | "text_completion" | "reading_passage";
+  passage_text?: string | null;
+  transcript?: string | null;
+  audio_url?: string | null;
+  image_url?: string | null;
+  source?: string | null;
+  questions_count?: number;
+}
+
+export interface QuestionGroupPayload {
+  skill: Skill;
+  part: number;
+  title?: string | null;
+  group_type: "conversation" | "talk" | "text_completion" | "reading_passage";
+  passage_text?: string | null;
+  transcript?: string | null;
+  audio_url?: string | null;
+  image_url?: string | null;
+  source?: string | null;
+}
+
+export interface AdminQuestionFilters {
+  skill?: "all" | Skill;
+  part?: "all" | number;
+  difficulty?: "all" | "easy" | "medium" | "hard";
+  q?: string;
+  page?: number;
+  perPage?: number;
 }
 
 export interface ApiAdminQuestion extends ApiQuestion {

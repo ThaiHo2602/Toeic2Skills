@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AdminActivityLog;
 use App\Models\Answer;
 use App\Models\Question;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -18,13 +19,15 @@ class AdminQuestionController extends Controller
             'skill' => ['nullable', 'in:listening,reading'],
             'part' => ['nullable', 'integer', 'between:1,7'],
             'q' => ['nullable', 'string', 'max:120'],
+            'difficulty_level' => ['nullable', 'in:easy,medium,hard'],
             'per_page' => ['nullable', 'integer', 'between:1,100'],
         ]);
 
         $questions = Question::query()
-            ->with('answers')
+            ->with('answers', 'group')
             ->when(isset($data['skill']), fn ($q) => $q->where('skill', $data['skill']))
             ->when(isset($data['part']), fn ($q) => $q->where('part', $data['part']))
+            ->when(isset($data['difficulty_level']), fn ($q) => $q->where('difficulty_level', $data['difficulty_level']))
             ->when(isset($data['q']), fn ($q) => $q->where('question_text', 'like', '%'.$data['q'].'%'))
             ->latest()
             ->paginate($data['per_page'] ?? 20);
@@ -70,6 +73,87 @@ class AdminQuestionController extends Controller
         $question->update(['is_active' => false]);
         $this->log($request, 'deactivate_question', $question);
         return response()->json(['success' => true]);
+    }
+
+    public function import(Request $request)
+    {
+        $data = $request->validate([
+            'file' => ['required', 'file', 'mimes:csv,txt', 'max:10240'],
+        ]);
+
+        /** @var UploadedFile $file */
+        $file = $data['file'];
+        $handle = fopen($file->getRealPath(), 'r');
+        abort_unless($handle !== false, 422, 'Unable to read import file.');
+
+        $headers = fgetcsv($handle);
+        if (!$headers) {
+            return response()->json(['success' => false, 'code' => 'EMPTY_IMPORT_FILE'], 422);
+        }
+        $headers = array_map(fn ($header) => trim((string) $header), $headers);
+
+        $created = 0;
+        $errors = [];
+        $rowNumber = 1;
+
+        while (($row = fgetcsv($handle)) !== false) {
+            $rowNumber += 1;
+            $record = array_combine($headers, array_pad($row, count($headers), null));
+            if (!$record) {
+                $errors[] = ['row' => $rowNumber, 'message' => 'Invalid column count.'];
+                continue;
+            }
+
+            try {
+                $correct = strtoupper(trim((string) ($record['correct_option'] ?? 'A')));
+                if (!in_array($correct, ['A', 'B', 'C', 'D'], true)) {
+                    throw new \RuntimeException('correct_option must be A, B, C, or D.');
+                }
+
+                DB::transaction(function () use ($record, $correct) {
+                    $question = Question::query()->create([
+                        'skill' => $record['skill'] ?? 'reading',
+                        'part' => (int) ($record['part'] ?? 5),
+                        'question_type' => $record['question_type'] ?? 'incomplete_sentence',
+                        'question_text' => $record['question_text'] ?? null,
+                        'passage_text' => $record['passage_text'] ?? null,
+                        'transcript' => $record['transcript'] ?? null,
+                        'audio_url' => $record['audio_url'] ?? null,
+                        'image_url' => $record['image_url'] ?? null,
+                        'explanation' => $record['explanation'] ?? null,
+                        'difficulty_level' => $record['difficulty_level'] ?? 'medium',
+                        'difficulty_score' => (int) ($record['difficulty_score'] ?? 55),
+                        'estimated_time_seconds' => (int) ($record['estimated_time_seconds'] ?? 60),
+                        'is_active' => true,
+                    ]);
+
+                    foreach (['A', 'B', 'C', 'D'] as $index => $letter) {
+                        $text = $record['option_'.$letter] ?? $record['option_'.strtolower($letter)] ?? null;
+                        if (!$text) {
+                            throw new \RuntimeException("Missing option {$letter}.");
+                        }
+                        Answer::query()->create([
+                            'question_id' => $question->id,
+                            'answer_text' => $text,
+                            'is_correct' => $correct === $letter,
+                            'display_order' => $index + 1,
+                        ]);
+                    }
+                });
+                $created += 1;
+            } catch (\Throwable $exception) {
+                $errors[] = ['row' => $rowNumber, 'message' => $exception->getMessage()];
+            }
+        }
+
+        fclose($handle);
+        AdminActivityLog::query()->create([
+            'admin_user_id' => $request->user()->id,
+            'action' => 'import_questions',
+            'metadata' => ['created' => $created, 'errors' => count($errors)],
+        ]);
+
+        return response()->json(['success' => true, 'created_count' => $created, 'errors' => $errors]);
     }
 
     private function validatedQuestion(Request $request, ?Question $question = null): array

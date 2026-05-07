@@ -22,7 +22,7 @@ class PracticeController extends Controller
 
         $count = $data['question_count'] ?? (($data['mode'] ?? 'practice') === 'full_test' ? 200 : 15);
         $query = Question::query()
-            ->with('answers')
+            ->with('answers', 'group')
             ->where('is_active', true)
             ->when($data['skill'] !== 'both', fn ($q) => $q->where('skill', $data['skill']))
             ->when(isset($data['part']), fn ($q) => $q->where('part', $data['part']))
@@ -30,6 +30,19 @@ class PracticeController extends Controller
             ->limit($count);
 
         $questions = $query->get();
+        $groupIds = $questions
+            ->filter(fn (Question $question) => in_array((int) $question->part, [3, 4, 6, 7], true) && $question->question_group_id)
+            ->pluck('question_group_id')
+            ->unique()
+            ->values();
+        if ($groupIds->isNotEmpty()) {
+            $groupQuestions = Question::query()
+                ->with('answers', 'group')
+                ->where('is_active', true)
+                ->whereIn('question_group_id', $groupIds)
+                ->get();
+            $questions = $questions->merge($groupQuestions)->unique('id')->values();
+        }
         if ($questions->isEmpty()) {
             return response()->json(['success' => false, 'code' => 'NO_QUESTIONS_AVAILABLE'], 422);
         }
@@ -64,6 +77,7 @@ class PracticeController extends Controller
     {
         return [
             'id' => $question->id,
+            'question_group_id' => $question->question_group_id,
             'skill' => $question->skill,
             'part' => $question->part,
             'question_type' => $question->question_type,
@@ -73,6 +87,17 @@ class PracticeController extends Controller
             'audio_url' => $question->audio_url,
             'image_url' => $question->image_url,
             'estimated_time_seconds' => $question->estimated_time_seconds,
+            'group' => $question->group ? [
+                'id' => $question->group->id,
+                'skill' => $question->group->skill,
+                'part' => $question->group->part,
+                'title' => $question->group->title,
+                'group_type' => $question->group->group_type,
+                'passage_text' => $question->group->passage_text,
+                'transcript' => null,
+                'audio_url' => $question->group->audio_url,
+                'image_url' => $question->group->image_url,
+            ] : null,
             'answers' => $question->answers->map(fn ($answer) => [
                 'id' => $answer->id,
                 'question_id' => $answer->question_id,

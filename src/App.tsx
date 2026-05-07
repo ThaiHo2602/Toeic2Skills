@@ -40,14 +40,18 @@ import {
   cancelSubscriptionApi,
   clearApiToken,
   createAdminQuestionApi,
+  createAdminQuestionGroupApi,
   extractAdminQuestions,
   deleteBookmarkApi,
+  getAdminQuestionGroupsApi,
   getAdminQuestionsApi,
+  getAdminQuestionsFilteredApi,
   getApiToken,
   getCurrentUserApi,
   getDashboardApi,
   getLearningToolsApi,
   getSubscriptionApi,
+  importAdminQuestionsApi,
   loginApi,
   logoutApi,
   mapApiAttempt,
@@ -67,6 +71,7 @@ import {
   updateAdminQuestionApi,
   uploadAdminMediaApi,
 } from "./services/api";
+import type { ApiPagination, ApiQuestionGroup } from "./services/api";
 import { createInitialState, loadState, saveState, submitAttempt } from "./services/storage";
 import { checkClientRateLimit, normalizeEmail, sanitizePlainText, validateAuthPayload } from "./services/security";
 import {
@@ -725,6 +730,7 @@ function App() {
           onSelectPart={setSelectedPart}
           onUpdateQuestion={updateAdminQuestion}
           onAddQuestion={addAdminQuestion}
+          onMergeQuestions={(questions) => setState((current) => ({ ...current, questions: mergeQuestions(current.questions, questions) }))}
         />
       )}
 
@@ -1803,23 +1809,60 @@ function AdminQuestionBankScreen({
   onSelectPart,
   onUpdateQuestion,
   onAddQuestion,
+  onMergeQuestions,
 }: {
   t: Translation;
   state: AppState;
   onSelectPart: (part: number) => void;
   onUpdateQuestion: (question: Question) => void;
   onAddQuestion: (question: Question) => void;
+  onMergeQuestions: (questions: Question[]) => void;
 }) {
   const [skill, setSkill] = useState<"all" | Skill>("all");
   const [part, setPart] = useState<"all" | number>("all");
   const [difficulty, setDifficulty] = useState<"all" | Question["difficultyLevel"]>("all");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState<ApiPagination<unknown> | null>(null);
+  const [groups, setGroups] = useState<ApiQuestionGroup[]>([]);
+  const [groupDraft, setGroupDraft] = useState({
+    title: "",
+    skill: "reading" as Skill,
+    part: 7,
+    group_type: "reading_passage" as ApiQuestionGroup["group_type"],
+    passage_text: "",
+    transcript: "",
+    audio_url: "",
+    image_url: "",
+  });
   const [selectedId, setSelectedId] = useState(state.questions[0]?.id ?? 0);
   const [adminNotice, setAdminNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAdminQuestionsFilteredApi({ skill, part, difficulty, q: query, page, perPage: 20 })
+      .then((response) => {
+        if (cancelled) return;
+        onMergeQuestions(response.questions.data.map(mapApiAdminQuestion));
+        setPagination(response.questions);
+      })
+      .catch((error) => console.warn("Admin filtered questions API unavailable.", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [skill, part, difficulty, query, page]);
+
+  useEffect(() => {
+    getAdminQuestionGroupsApi()
+      .then((response) => setGroups(response.groups))
+      .catch((error) => console.warn("Admin question groups API unavailable.", error));
+  }, []);
 
   const filteredQuestions = state.questions.filter((question) => {
     if (skill !== "all" && question.skill !== skill) return false;
     if (part !== "all" && question.part !== part) return false;
     if (difficulty !== "all" && question.difficultyLevel !== difficulty) return false;
+    if (query && !`${question.questionText ?? ""} ${question.explanation ?? ""}`.toLowerCase().includes(query.toLowerCase())) return false;
     return true;
   });
 
@@ -1854,6 +1897,37 @@ function AdminQuestionBankScreen({
     onSelectPart(sample.part);
   }
 
+  async function importQuestions(file: File) {
+    try {
+      const response = await importAdminQuestionsApi(file);
+      setAdminNotice(`Imported ${response.created_count} questions${response.errors.length ? `, ${response.errors.length} rows need review` : ""}.`);
+      const refreshed = await getAdminQuestionsFilteredApi({ skill, part, difficulty, q: query, page, perPage: 20 });
+      onMergeQuestions(refreshed.questions.data.map(mapApiAdminQuestion));
+      setPagination(refreshed.questions);
+    } catch (error) {
+      console.warn("Question import failed.", error);
+      setAdminNotice("Import failed. Please check CSV columns and values.");
+    }
+  }
+
+  async function createGroup() {
+    try {
+      const response = await createAdminQuestionGroupApi({
+        ...groupDraft,
+        title: groupDraft.title || null,
+        passage_text: groupDraft.passage_text || null,
+        transcript: groupDraft.transcript || null,
+        audio_url: groupDraft.audio_url || null,
+        image_url: groupDraft.image_url || null,
+      });
+      setGroups((current) => [response.group, ...current]);
+      setAdminNotice(`Created group #${response.group.id}. Select it in the editor to attach questions.`);
+    } catch (error) {
+      console.warn("Create question group failed.", error);
+      setAdminNotice("Could not create group. Check required group fields.");
+    }
+  }
+
   return (
     <div className="admin-page">
       <GlassCard className="page-hero admin-hero">
@@ -1870,8 +1944,19 @@ function AdminQuestionBankScreen({
 
       <GlassCard className="admin-toolbar">
         <label>
+          <span>Search</span>
+          <input
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setPage(1);
+            }}
+            placeholder="Search prompt or explanation"
+          />
+        </label>
+        <label>
           <span>{t.admin.filterSkill}</span>
-          <select value={skill} onChange={(event) => setSkill(event.target.value as "all" | Skill)}>
+          <select value={skill} onChange={(event) => { setSkill(event.target.value as "all" | Skill); setPage(1); }}>
             <option value="all">{t.admin.all}</option>
             <option value="listening">{t.common.listening}</option>
             <option value="reading">{t.common.reading}</option>
@@ -1879,7 +1964,7 @@ function AdminQuestionBankScreen({
         </label>
         <label>
           <span>{t.admin.filterPart}</span>
-          <select value={part} onChange={(event) => setPart(event.target.value === "all" ? "all" : Number(event.target.value))}>
+          <select value={part} onChange={(event) => { setPart(event.target.value === "all" ? "all" : Number(event.target.value)); setPage(1); }}>
             <option value="all">{t.admin.all}</option>
             {[1, 2, 3, 4, 5, 6, 7].map((item) => (
               <option key={item} value={item}>
@@ -1890,7 +1975,7 @@ function AdminQuestionBankScreen({
         </label>
         <label>
           <span>{t.admin.filterDifficulty}</span>
-          <select value={difficulty} onChange={(event) => setDifficulty(event.target.value as "all" | Question["difficultyLevel"])}>
+          <select value={difficulty} onChange={(event) => { setDifficulty(event.target.value as "all" | Question["difficultyLevel"]); setPage(1); }}>
             <option value="all">{t.admin.all}</option>
             <option value="easy">easy</option>
             <option value="medium">medium</option>
@@ -1904,7 +1989,7 @@ function AdminQuestionBankScreen({
         <GlassCard className="admin-list-card">
           <div className="card-heading">
             <h2>{t.admin.questionList}</h2>
-            <span>{filteredQuestions.length}</span>
+            <span>{pagination ? `${pagination.total} total` : filteredQuestions.length}</span>
           </div>
           <div className="admin-question-list">
             {filteredQuestions.map((question) => (
@@ -1926,6 +2011,13 @@ function AdminQuestionBankScreen({
               </button>
             ))}
           </div>
+          {pagination && (
+            <div className="admin-pagination">
+              <GhostButton disabled={pagination.current_page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Prev</GhostButton>
+              <span>Page {pagination.current_page}/{pagination.last_page}</span>
+              <GhostButton disabled={pagination.current_page >= pagination.last_page} onClick={() => setPage((value) => value + 1)}>Next</GhostButton>
+            </div>
+          )}
         </GlassCard>
 
         <GlassCard className="admin-editor-card">
@@ -1937,6 +2029,7 @@ function AdminQuestionBankScreen({
             <QuestionMetadataEditor
               t={t}
               question={selectedQuestion}
+              groups={groups}
               onSave={(question) => {
                 onUpdateQuestion(question);
                 setAdminNotice("Saved question metadata and answers.");
@@ -1963,6 +2056,64 @@ function AdminQuestionBankScreen({
           </div>
           <p>{t.admin.importHint}</p>
           <pre>{t.admin.csvColumns}</pre>
+          <input type="file" accept=".csv,text/csv" onChange={(event) => event.target.files?.[0] && importQuestions(event.target.files[0])} />
+          <a
+            href={`data:text/csv;charset=utf-8,${encodeURIComponent("skill,part,question_type,question_text,passage_text,transcript,audio_url,image_url,difficulty_level,difficulty_score,estimated_time_seconds,explanation,option_A,option_B,option_C,option_D,correct_option\nreading,5,incomplete_sentence,The team will ____ the proposal tomorrow.,,,,,easy,30,30,A base verb follows will.,review,reviewed,reviewing,reviews,A")}`}
+            download="toeic-question-import-template.csv"
+          >
+            Download CSV template
+          </a>
+        </GlassCard>
+
+        <GlassCard className="admin-import-card">
+          <div className="card-heading">
+            <h2>Question Groups</h2>
+            <span>{groups.length}</span>
+          </div>
+          <div className="admin-form-grid">
+            <label>
+              <span>Title</span>
+              <input value={groupDraft.title} onChange={(event) => setGroupDraft((current) => ({ ...current, title: event.target.value }))} />
+            </label>
+            <label>
+              <span>Skill</span>
+              <select value={groupDraft.skill} onChange={(event) => setGroupDraft((current) => ({ ...current, skill: event.target.value as Skill }))}>
+                <option value="listening">{t.common.listening}</option>
+                <option value="reading">{t.common.reading}</option>
+              </select>
+            </label>
+            <label>
+              <span>Part</span>
+              <input type="number" min={1} max={7} value={groupDraft.part} onChange={(event) => setGroupDraft((current) => ({ ...current, part: Number(event.target.value) }))} />
+            </label>
+            <label>
+              <span>Type</span>
+              <select value={groupDraft.group_type} onChange={(event) => setGroupDraft((current) => ({ ...current, group_type: event.target.value as ApiQuestionGroup["group_type"] }))}>
+                <option value="conversation">conversation</option>
+                <option value="talk">talk</option>
+                <option value="text_completion">text_completion</option>
+                <option value="reading_passage">reading_passage</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            <span>Passage</span>
+            <textarea value={groupDraft.passage_text} onChange={(event) => setGroupDraft((current) => ({ ...current, passage_text: event.target.value }))} />
+          </label>
+          <label>
+            <span>Transcript</span>
+            <textarea value={groupDraft.transcript} onChange={(event) => setGroupDraft((current) => ({ ...current, transcript: event.target.value }))} />
+          </label>
+          <GradientButton onClick={createGroup}>Create Group</GradientButton>
+          <div className="admin-question-list compact">
+            {groups.slice(0, 6).map((group) => (
+              <div className="admin-question-row" key={group.id}>
+                <span>#{group.id} · {group.skill} · Part {group.part}</span>
+                <strong>{group.title || group.group_type}</strong>
+                <small>{group.questions_count ?? 0} questions</small>
+              </div>
+            ))}
+          </div>
         </GlassCard>
       </div>
     </div>
@@ -1972,10 +2123,12 @@ function AdminQuestionBankScreen({
 function QuestionMetadataEditor({
   t,
   question,
+  groups,
   onSave,
 }: {
   t: Translation;
   question: Question;
+  groups: ApiQuestionGroup[];
   onSave: (question: Question) => void;
 }) {
   const [draft, setDraft] = useState<Question & { answers?: Answer[] }>(() => withEditableAnswers(question));
@@ -2028,6 +2181,22 @@ function QuestionMetadataEditor({
         <label>
           <span>Type</span>
           <input value={draft.questionType} onChange={(event) => update("questionType", event.target.value)} />
+        </label>
+        <label>
+          <span>Group</span>
+          <select
+            value={draft.questionGroupId ?? ""}
+            onChange={(event) => update("questionGroupId", event.target.value ? Number(event.target.value) : undefined)}
+          >
+            <option value="">No group</option>
+            {groups
+              .filter((group) => group.skill === draft.skill && group.part === draft.part)
+              .map((group) => (
+                <option key={group.id} value={group.id}>
+                  #{group.id} {group.title || group.group_type}
+                </option>
+              ))}
+          </select>
         </label>
         <label>
           <span>{t.admin.filterSkill}</span>
