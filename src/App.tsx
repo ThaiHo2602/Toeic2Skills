@@ -41,7 +41,9 @@ import {
   clearApiToken,
   createAdminQuestionApi,
   createAdminQuestionGroupApi,
+  createAdminTestSetApi,
   extractAdminQuestions,
+  getAdminTestSetsApi,
   deleteBookmarkApi,
   getAdminQuestionGroupsApi,
   getAdminQuestionsApi,
@@ -51,6 +53,7 @@ import {
   getDashboardApi,
   getLearningToolsApi,
   getSubscriptionApi,
+  getTestSetsApi,
   importAdminQuestionsApi,
   loginApi,
   logoutApi,
@@ -69,9 +72,10 @@ import {
   submitAttemptApi,
   subscribeApi,
   updateAdminQuestionApi,
+  updateAdminTestSetApi,
   uploadAdminMediaApi,
 } from "./services/api";
-import type { ApiPagination, ApiQuestionGroup } from "./services/api";
+import type { AdminTestSetPayload, ApiPagination, ApiQuestionGroup, ApiTestSet } from "./services/api";
 import { createInitialState, loadState, saveState, submitAttempt } from "./services/storage";
 import { checkClientRateLimit, normalizeEmail, sanitizePlainText, validateAuthPayload } from "./services/security";
 import {
@@ -172,6 +176,7 @@ function App() {
   const [revealedQuestionId, setRevealedQuestionId] = useState<number | null>(null);
   const [accessModal, setAccessModal] = useState<AccessDecision | null>(null);
   const [remoteSummary, setRemoteSummary] = useState<ReturnType<typeof mapSubscriptionSummary> | null>(null);
+  const [testSets, setTestSets] = useState<ApiTestSet[]>([]);
 
   useEffect(() => {
     saveState(state);
@@ -183,10 +188,11 @@ function App() {
 
   useEffect(() => {
     if (!getApiToken()) return;
-    Promise.all([getCurrentUserApi(), getSubscriptionApi(), getDashboardApi().catch(() => null), getLearningToolsApi().catch(() => null)])
-      .then(([userResponse, subscriptionResponse, dashboardResponse, toolsResponse]) => {
+    Promise.all([getCurrentUserApi(), getSubscriptionApi(), getDashboardApi().catch(() => null), getLearningToolsApi().catch(() => null), getTestSetsApi().catch(() => null)])
+      .then(([userResponse, subscriptionResponse, dashboardResponse, toolsResponse, testSetsResponse]) => {
         const apiUser = mapApiUser(userResponse.user);
         setRemoteSummary(mapSubscriptionSummary(subscriptionResponse));
+        if (testSetsResponse) setTestSets(testSetsResponse.test_sets);
         setState((current) => ({
           ...(dashboardResponse ? applyDashboardToState(current, dashboardResponse) : current),
           ...(toolsResponse ? toolsResponse : {}),
@@ -320,9 +326,9 @@ function App() {
     setView("practice");
   }
 
-  async function startTest(mode: "mini_test" | "full_test" | "placement") {
+  async function startTest(mode: "mini_test" | "full_test" | "placement", testSetId?: number) {
     try {
-      const response = await startTestApi(mode);
+      const response = await startTestApi(mode, testSetId);
       const backendQuestions = response.questions.map(mapApiQuestion);
       const backendAttempt = mapApiAttempt(response.attempt);
       setState({
@@ -704,7 +710,7 @@ function App() {
         <PracticeLanding t={t} selectedPart={selectedPart} onPartChange={setSelectedPart} onStartPractice={startPractice} />
       )}
 
-      {view === "tests" && <TestsScreen t={t} state={state} summary={summary} onStartTest={startTest} onUpgrade={() => setView("premium")} />}
+      {view === "tests" && <TestsScreen t={t} state={state} summary={summary} testSets={testSets} onStartTest={startTest} onUpgrade={() => setView("premium")} />}
 
       {view === "ai" && <AICoachScreen t={t} summary={summary} onFeature={checkFeature} onUpgrade={() => setView("premium")} />}
 
@@ -727,6 +733,8 @@ function App() {
         <AdminQuestionBankScreen
           t={t}
           state={state}
+          testSets={testSets}
+          onTestSetsChange={setTestSets}
           onSelectPart={setSelectedPart}
           onUpdateQuestion={updateAdminQuestion}
           onAddQuestion={addAdminQuestion}
@@ -1606,20 +1614,34 @@ function TestsScreen({
   t,
   state,
   summary,
+  testSets,
   onStartTest,
   onUpgrade,
 }: {
   t: Translation;
   state: AppState;
   summary: ReturnType<typeof getSubscriptionSummary>;
-  onStartTest: (mode: "mini_test" | "full_test" | "placement") => void;
+  testSets: ApiTestSet[];
+  onStartTest: (mode: "mini_test" | "full_test" | "placement", testSetId?: number) => void;
   onUpgrade: () => void;
 }) {
-  const tests = [
-    { title: t.tests.miniMixed, type: "mini_test" as const, questions: 14, time: "15 min", difficulty: "Medium", score: t.tests.estimated },
-    { title: t.tests.fullSimulation, type: "full_test" as const, questions: state.questions.length, time: "120 min", difficulty: "Hard", score: "10-990" },
-    { title: t.tests.placement, type: "placement" as const, questions: 14, time: "12 min", difficulty: "Adaptive", score: t.tests.baseline },
-  ];
+  const remoteTests = testSets.map((testSet) => ({
+    id: testSet.id,
+    title: testSet.title,
+    type: (testSet.type === "mini" ? "mini_test" : testSet.type === "full" ? "full_test" : "placement") as "mini_test" | "full_test" | "placement",
+    questions: testSet.listening_question_count + testSet.reading_question_count,
+    time: `${testSet.duration_minutes} min`,
+    difficulty: testSet.difficulty_level,
+    score: testSet.estimated_score_min && testSet.estimated_score_max ? `${testSet.estimated_score_min}-${testSet.estimated_score_max}` : t.tests.estimated,
+    description: testSet.description,
+  }));
+  const tests = remoteTests.length
+    ? remoteTests
+    : [
+        { title: t.tests.miniMixed, type: "mini_test" as const, questions: 14, time: "15 min", difficulty: "medium", score: t.tests.estimated, description: null },
+        { title: t.tests.fullSimulation, type: "full_test" as const, questions: state.questions.length, time: "120 min", difficulty: "hard", score: "10-990", description: null },
+        { title: t.tests.placement, type: "placement" as const, questions: 14, time: "12 min", difficulty: "medium", score: t.tests.baseline, description: null },
+      ];
   const outOfFreeTests = !summary.isPremium && summary.remainingTestsToday === 0;
 
   return (
@@ -1637,10 +1659,11 @@ function TestsScreen({
       <div className="test-card-grid">
         {tests.map((test) => (
           <GlassCard className="test-card" key={test.title}>
-            <span className="difficulty medium">{test.difficulty}</span>
+            <span className={`difficulty ${test.difficulty}`}>{test.difficulty}</span>
             <h2>{test.title}</h2>
+            {test.description && <p>{test.description}</p>}
             <p>{test.questions} {t.common.questions} · {test.time} · {test.score}</p>
-            <GradientButton onClick={() => onStartTest(test.type)} disabled={outOfFreeTests}>
+            <GradientButton onClick={() => onStartTest(test.type, "id" in test ? test.id : undefined)} disabled={outOfFreeTests}>
               {t.common.startTest} <ArrowRight size={16} />
             </GradientButton>
             {outOfFreeTests && <GhostButton onClick={onUpgrade}>{t.common.upgrade}</GhostButton>}
@@ -1806,6 +1829,8 @@ function PremiumScreen({
 function AdminQuestionBankScreen({
   t,
   state,
+  testSets,
+  onTestSetsChange,
   onSelectPart,
   onUpdateQuestion,
   onAddQuestion,
@@ -1813,6 +1838,8 @@ function AdminQuestionBankScreen({
 }: {
   t: Translation;
   state: AppState;
+  testSets: ApiTestSet[];
+  onTestSetsChange: (testSets: ApiTestSet[]) => void;
   onSelectPart: (part: number) => void;
   onUpdateQuestion: (question: Question) => void;
   onAddQuestion: (question: Question) => void;
@@ -1837,6 +1864,17 @@ function AdminQuestionBankScreen({
   });
   const [selectedId, setSelectedId] = useState(state.questions[0]?.id ?? 0);
   const [adminNotice, setAdminNotice] = useState<string | null>(null);
+  const [testSetDraft, setTestSetDraft] = useState<AdminTestSetPayload>({
+    title: "New Mini Test",
+    type: "mini",
+    description: "Mixed TOEIC practice test",
+    duration_minutes: 15,
+    difficulty_level: "medium",
+    estimated_score_min: 350,
+    estimated_score_max: 750,
+    is_published: true,
+    question_ids: [],
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -1856,6 +1894,9 @@ function AdminQuestionBankScreen({
     getAdminQuestionGroupsApi()
       .then((response) => setGroups(response.groups))
       .catch((error) => console.warn("Admin question groups API unavailable.", error));
+    getAdminTestSetsApi()
+      .then((response) => onTestSetsChange(response.test_sets.data))
+      .catch((error) => console.warn("Admin test sets API unavailable.", error));
   }, []);
 
   const filteredQuestions = state.questions.filter((question) => {
@@ -1926,6 +1967,59 @@ function AdminQuestionBankScreen({
       console.warn("Create question group failed.", error);
       setAdminNotice("Could not create group. Check required group fields.");
     }
+  }
+
+  async function saveTestSet() {
+    if (!testSetDraft.question_ids.length) {
+      setAdminNotice("Select at least one question before publishing a test set.");
+      return;
+    }
+
+    try {
+      const response = await createAdminTestSetApi(testSetDraft);
+      const refreshed = await getAdminTestSetsApi();
+      onTestSetsChange(refreshed.test_sets.data);
+      setAdminNotice(`Created test set #${response.test_set.id}: ${response.test_set.title}.`);
+    } catch (error) {
+      console.warn("Create test set failed.", error);
+      setAdminNotice("Could not create test set. Check selected questions and fields.");
+    }
+  }
+
+  async function togglePublishTestSet(testSet: ApiTestSet) {
+    try {
+      const detailQuestionIds = testSet.questions?.map((question) => question.id);
+      const payload: AdminTestSetPayload = {
+        title: testSet.title,
+        type: testSet.type,
+        description: testSet.description ?? null,
+        duration_minutes: testSet.duration_minutes,
+        difficulty_level: testSet.difficulty_level,
+        estimated_score_min: testSet.estimated_score_min ?? null,
+        estimated_score_max: testSet.estimated_score_max ?? null,
+        is_published: !testSet.is_published,
+        question_ids: detailQuestionIds?.length ? detailQuestionIds : testSetDraft.question_ids,
+      };
+      if (!payload.question_ids.length) {
+        setAdminNotice("Open/edit is limited for old rows without loaded questions. Create a new version from selected questions.");
+        return;
+      }
+      await updateAdminTestSetApi(testSet.id, payload);
+      const refreshed = await getAdminTestSetsApi();
+      onTestSetsChange(refreshed.test_sets.data);
+    } catch (error) {
+      console.warn("Toggle test set publish failed.", error);
+      setAdminNotice("Could not update test set publish status.");
+    }
+  }
+
+  function toggleDraftQuestion(questionId: number) {
+    setTestSetDraft((current) => ({
+      ...current,
+      question_ids: current.question_ids.includes(questionId)
+        ? current.question_ids.filter((id) => id !== questionId)
+        : [...current.question_ids, questionId],
+    }));
   }
 
   return (
@@ -2063,6 +2157,79 @@ function AdminQuestionBankScreen({
           >
             Download CSV template
           </a>
+        </GlassCard>
+
+        <GlassCard className="admin-testset-card">
+          <div className="card-heading">
+            <h2>Test Set Builder</h2>
+            <span>{testSetDraft.question_ids.length} selected</span>
+          </div>
+          <div className="admin-form-grid">
+            <label>
+              <span>Title</span>
+              <input value={testSetDraft.title} onChange={(event) => setTestSetDraft((current) => ({ ...current, title: event.target.value }))} />
+            </label>
+            <label>
+              <span>Type</span>
+              <select value={testSetDraft.type} onChange={(event) => setTestSetDraft((current) => ({ ...current, type: event.target.value as ApiTestSet["type"] }))}>
+                <option value="mini">Mini Test</option>
+                <option value="full">Full Test</option>
+                <option value="placement">Placement</option>
+              </select>
+            </label>
+            <label>
+              <span>Duration</span>
+              <input type="number" min={1} max={240} value={testSetDraft.duration_minutes} onChange={(event) => setTestSetDraft((current) => ({ ...current, duration_minutes: Number(event.target.value) }))} />
+            </label>
+            <label>
+              <span>Difficulty</span>
+              <select value={testSetDraft.difficulty_level} onChange={(event) => setTestSetDraft((current) => ({ ...current, difficulty_level: event.target.value as Question["difficultyLevel"] }))}>
+                <option value="easy">easy</option>
+                <option value="medium">medium</option>
+                <option value="hard">hard</option>
+              </select>
+            </label>
+            <label>
+              <span>Min score</span>
+              <input type="number" min={10} max={990} value={testSetDraft.estimated_score_min ?? ""} onChange={(event) => setTestSetDraft((current) => ({ ...current, estimated_score_min: event.target.value ? Number(event.target.value) : null }))} />
+            </label>
+            <label>
+              <span>Max score</span>
+              <input type="number" min={10} max={990} value={testSetDraft.estimated_score_max ?? ""} onChange={(event) => setTestSetDraft((current) => ({ ...current, estimated_score_max: event.target.value ? Number(event.target.value) : null }))} />
+            </label>
+          </div>
+          <label>
+            <span>Description</span>
+            <textarea value={testSetDraft.description ?? ""} onChange={(event) => setTestSetDraft((current) => ({ ...current, description: event.target.value }))} />
+          </label>
+          <label className="admin-checkbox">
+            <input type="checkbox" checked={testSetDraft.is_published} onChange={(event) => setTestSetDraft((current) => ({ ...current, is_published: event.target.checked }))} />
+            Published and visible on Tests screen
+          </label>
+          <div className="testset-question-picker">
+            {filteredQuestions.slice(0, 30).map((question) => (
+              <button
+                type="button"
+                key={`testset-${question.id}`}
+                className={testSetDraft.question_ids.includes(question.id) ? "picker-question selected" : "picker-question"}
+                onClick={() => toggleDraftQuestion(question.id)}
+              >
+                <span>Part {question.part} · {question.skill}</span>
+                <strong>{question.questionText}</strong>
+              </button>
+            ))}
+          </div>
+          <GradientButton onClick={saveTestSet}>Publish Test Set</GradientButton>
+          <div className="admin-question-list compact">
+            {testSets.slice(0, 6).map((testSet) => (
+              <div className="admin-question-row" key={testSet.id}>
+                <span>#{testSet.id} · {testSet.type} · {testSet.duration_minutes} min</span>
+                <strong>{testSet.title}</strong>
+                <small>{testSet.questions_count ?? testSet.listening_question_count + testSet.reading_question_count} questions · {testSet.is_published ? "published" : "draft"}</small>
+                <GhostButton onClick={() => togglePublishTestSet(testSet)}>{testSet.is_published ? "Unpublish" : "Publish"}</GhostButton>
+              </div>
+            ))}
+          </div>
         </GlassCard>
 
         <GlassCard className="admin-import-card">

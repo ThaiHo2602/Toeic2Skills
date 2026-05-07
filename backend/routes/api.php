@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AdminQuestionController;
 use App\Http\Controllers\Api\AdminMediaController;
 use App\Http\Controllers\Api\AdminQuestionGroupController;
+use App\Http\Controllers\Api\AdminTestSetController;
 use App\Http\Controllers\Api\AttemptController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BookmarkController;
@@ -11,6 +12,7 @@ use App\Http\Controllers\Api\FeatureController;
 use App\Http\Controllers\Api\PlanController;
 use App\Http\Controllers\Api\PracticeController;
 use App\Http\Controllers\Api\SubscriptionController;
+use App\Http\Controllers\Api\TestSetController;
 use App\Http\Controllers\Api\VocabularyItemController;
 use Illuminate\Support\Facades\Route;
 
@@ -31,6 +33,7 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
     Route::get('/me/usage/today', [SubscriptionController::class, 'usageToday']);
     Route::get('/dashboard', [DashboardController::class, 'summary']);
     Route::get('/attempts', [DashboardController::class, 'attempts']);
+    Route::get('/tests', [TestSetController::class, 'index']);
     Route::post('/subscriptions/subscribe', [SubscriptionController::class, 'subscribe'])->middleware('throttle:10,1');
     Route::post('/subscriptions/cancel', [SubscriptionController::class, 'cancel']);
     Route::get('/features/{featureKey}/access', [FeatureController::class, 'access']);
@@ -60,5 +63,6 @@ Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function () {
         Route::post('questions/import', [AdminQuestionController::class, 'import'])->middleware('throttle:10,1');
         Route::apiResource('question-groups', AdminQuestionGroupController::class)->except(['show']);
         Route::apiResource('questions', AdminQuestionController::class)->except(['show']);
+        Route::apiResource('test-sets', AdminTestSetController::class);
     });
 });

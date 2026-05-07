@@ -123,8 +123,14 @@ export function startPracticeApi(part: number, questionCount: number, adaptive =
   });
 }
 
-export function startTestApi(mode: "mini_test" | "full_test" | "placement") {
-  return apiRequest<ApiStartAttemptResponse>("/tests/start", { method: "POST", json: { mode, skill: "both" } });
+export function getTestSetsApi(type?: ApiTestSet["type"]) {
+  const search = new URLSearchParams();
+  if (type) search.set("type", type);
+  return apiRequest<{ success: true; test_sets: ApiTestSet[] }>(`/tests${search.toString() ? `?${search.toString()}` : ""}`);
+}
+
+export function startTestApi(mode: "mini_test" | "full_test" | "placement", testSetId?: number) {
+  return apiRequest<ApiStartAttemptResponse>("/tests/start", { method: "POST", json: { mode, skill: "both", test_set_id: testSetId } });
 }
 
 export function submitAttemptApi(attempt: UserAttempt) {
@@ -187,6 +193,22 @@ export function updateAdminQuestionApi(question: Question) {
 
 export function deleteAdminQuestionApi(questionId: number) {
   return apiRequest<{ success: true; question: ApiAdminQuestion }>(`/admin/questions/${questionId}`, { method: "DELETE" });
+}
+
+export function getAdminTestSetsApi() {
+  return apiRequest<{ success: true; test_sets: ApiPagination<ApiTestSet> }>("/admin/test-sets");
+}
+
+export function createAdminTestSetApi(payload: AdminTestSetPayload) {
+  return apiRequest<{ success: true; test_set: ApiTestSet }>("/admin/test-sets", { method: "POST", json: payload });
+}
+
+export function updateAdminTestSetApi(testSetId: number, payload: AdminTestSetPayload) {
+  return apiRequest<{ success: true; test_set: ApiTestSet }>(`/admin/test-sets/${testSetId}`, { method: "PUT", json: payload });
+}
+
+export function deleteAdminTestSetApi(testSetId: number) {
+  return apiRequest<{ success: true }>(`/admin/test-sets/${testSetId}`, { method: "DELETE" });
 }
 
 export async function uploadAdminMediaApi(file: File) {
@@ -468,6 +490,34 @@ export interface ApiStartAttemptResponse {
   success: true;
   attempt: ApiAttempt;
   questions: ApiQuestion[];
+}
+
+export interface ApiTestSet {
+  id: number;
+  title: string;
+  type: "mini" | "full" | "placement";
+  description?: string | null;
+  listening_question_count: number;
+  reading_question_count: number;
+  duration_minutes: number;
+  difficulty_level: "easy" | "medium" | "hard";
+  estimated_score_min?: number | null;
+  estimated_score_max?: number | null;
+  is_published: boolean;
+  questions_count?: number;
+  questions?: ApiQuestion[];
+}
+
+export interface AdminTestSetPayload {
+  title: string;
+  type: ApiTestSet["type"];
+  description?: string | null;
+  duration_minutes: number;
+  difficulty_level?: "easy" | "medium" | "hard";
+  estimated_score_min?: number | null;
+  estimated_score_max?: number | null;
+  is_published: boolean;
+  question_ids: number[];
 }
 
 export interface ApiSubmitAttemptResponse {

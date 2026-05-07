@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Attempt;
 use App\Models\Question;
+use App\Models\TestSet;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -18,18 +19,36 @@ class PracticeController extends Controller
             'part' => ['nullable', 'integer', 'between:1,7'],
             'question_count' => ['nullable', 'integer', 'between:1,200'],
             'adaptive' => ['nullable', 'boolean'],
+            'test_set_id' => ['nullable', 'integer', 'exists:test_sets,id'],
         ]);
 
-        $count = $data['question_count'] ?? (($data['mode'] ?? 'practice') === 'full_test' ? 200 : 15);
-        $query = Question::query()
-            ->with('answers', 'group')
-            ->where('is_active', true)
-            ->when($data['skill'] !== 'both', fn ($q) => $q->where('skill', $data['skill']))
-            ->when(isset($data['part']), fn ($q) => $q->where('part', $data['part']))
-            ->inRandomOrder()
-            ->limit($count);
+        $testSet = null;
+        if (isset($data['test_set_id'])) {
+            $testSet = TestSet::query()
+                ->where('id', $data['test_set_id'])
+                ->where('is_published', true)
+                ->with('questions.answers', 'questions.group')
+                ->firstOrFail();
+            $questions = $testSet->questions;
+            $data['mode'] = match ($testSet->type) {
+                'mini' => 'mini_test',
+                'full' => 'full_test',
+                default => 'placement',
+            };
+            $data['skill'] = 'both';
+        } else {
+            $count = $data['question_count'] ?? (($data['mode'] ?? 'practice') === 'full_test' ? 200 : 15);
+            $query = Question::query()
+                ->with('answers', 'group')
+                ->where('is_active', true)
+                ->when($data['skill'] !== 'both', fn ($q) => $q->where('skill', $data['skill']))
+                ->when(isset($data['part']), fn ($q) => $q->where('part', $data['part']))
+                ->inRandomOrder()
+                ->limit($count);
 
-        $questions = $query->get();
+            $questions = $query->get();
+        }
+
         $groupIds = $questions
             ->filter(fn (Question $question) => in_array((int) $question->part, [3, 4, 6, 7], true) && $question->question_group_id)
             ->pluck('question_group_id')
@@ -47,9 +66,10 @@ class PracticeController extends Controller
             return response()->json(['success' => false, 'code' => 'NO_QUESTIONS_AVAILABLE'], 422);
         }
 
-        $attempt = DB::transaction(function () use ($request, $data, $questions) {
+        $attempt = DB::transaction(function () use ($request, $data, $questions, $testSet) {
             $attempt = Attempt::query()->create([
                 'user_id' => $request->user()->id,
+                'test_set_id' => $testSet?->id,
                 'mode' => $data['mode'] ?? 'practice',
                 'skill' => $data['skill'],
                 'part' => $data['part'] ?? null,

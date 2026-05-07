@@ -6,6 +6,7 @@ use App\Models\Answer;
 use App\Models\GrammarPoint;
 use App\Models\Plan;
 use App\Models\Question;
+use App\Models\TestSet;
 use App\Models\Topic;
 use App\Models\User;
 use Illuminate\Database\Seeder;
@@ -79,6 +80,23 @@ class DatabaseSeeder extends Seeder
             ['answer_text' => 'A man is opening a window.', 'is_correct' => false, 'display_order' => 2],
             ['answer_text' => 'People are boarding a train.', 'is_correct' => false, 'display_order' => 3],
             ['answer_text' => 'The room is empty.', 'is_correct' => false, 'display_order' => 4],
+        ]);
+
+        $demoTest = TestSet::query()->updateOrCreate(['id' => 1], [
+            'title' => 'Demo Mini Test',
+            'type' => 'mini',
+            'description' => 'Short mixed TOEIC check from seeded questions.',
+            'listening_question_count' => 1,
+            'reading_question_count' => 1,
+            'duration_minutes' => 12,
+            'difficulty_level' => 'easy',
+            'estimated_score_min' => 350,
+            'estimated_score_max' => 650,
+            'is_published' => true,
+        ]);
+        $demoTest->questions()->sync([
+            2 => ['question_group_id' => null, 'section' => 'listening', 'display_order' => 1],
+            1 => ['question_group_id' => null, 'section' => 'reading', 'display_order' => 2],
         ]);
     }
 
