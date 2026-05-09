@@ -854,17 +854,51 @@ kbd {
   background: rgba(245, 158, 11, 0.12);
 }
 
+.difficulty.easy {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.difficulty.hard {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.recommendation-stack {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
 .compact-row {
   width: 100%;
   min-height: 58px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 12px;
   padding: 0 16px;
   border: 1px solid var(--border);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.5);
+  color: var(--text);
+  text-align: left;
+}
+
+.compact-row span,
+.compact-row strong,
+.compact-row small {
+  min-width: 0;
+}
+
+.compact-row strong,
+.compact-row small {
+  display: block;
+}
+
+.compact-row small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .ai-card {

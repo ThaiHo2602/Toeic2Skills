@@ -52,6 +52,7 @@ import {
   getLearningToolsApi,
   getMetadataApi,
   getPlansApi,
+  getRecommendationsApi,
   getSubscriptionApi,
   getTestSetsApi,
   loginApi,
@@ -74,6 +75,7 @@ import {
   updateAdminQuestionApi,
 } from "./services/api";
 import type { ApiTestSet } from "./services/api";
+import type { ApiRecommendation } from "./services/api";
 import { createInitialState, loadState, saveState, submitAttempt } from "./services/storage";
 import { checkClientRateLimit, normalizeEmail, sanitizePlainText, validateAuthPayload } from "./services/security";
 import {
@@ -175,6 +177,7 @@ function App() {
   const [accessModal, setAccessModal] = useState<AccessDecision | null>(null);
   const [remoteSummary, setRemoteSummary] = useState<ReturnType<typeof mapSubscriptionSummary> | null>(null);
   const [testSets, setTestSets] = useState<ApiTestSet[]>([]);
+  const [recommendations, setRecommendations] = useState<ApiRecommendation[]>([]);
 
   useEffect(() => {
     saveState(state);
@@ -238,6 +241,29 @@ function App() {
   const estimatedTotal =
     latestAttempt?.estimatedTotalScore ??
     ((state.skillStats.listening.estimatedScore ?? 250) + (state.skillStats.reading.estimatedScore ?? 250));
+
+  useEffect(() => {
+    if (!state.auth.isAuthenticated || !getApiToken() || !summary.features.recommendations) {
+      setRecommendations([]);
+      return;
+    }
+
+    let cancelled = false;
+    getRecommendationsApi()
+      .then((response) => {
+        if (!cancelled) setRecommendations(response.recommendations);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setRecommendations([]);
+          console.warn("Recommendations API unavailable or locked.", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state.auth.isAuthenticated, state.user.role, summary.features.recommendations, latestAttempt?.id]);
 
   useEffect(() => {
     if (view !== "admin" || !state.auth.isAuthenticated) return;
@@ -689,6 +715,7 @@ function App() {
           estimatedTotal={estimatedTotal}
           latestAttempt={latestAttempt}
           selectedPart={selectedPart}
+          recommendations={recommendations}
           onPartChange={setSelectedPart}
           onStartPractice={startPractice}
           onPremiumFeature={checkFeature}
@@ -923,6 +950,7 @@ function HomeDashboard({
   estimatedTotal,
   latestAttempt,
   selectedPart,
+  recommendations,
   onPartChange,
   onStartPractice,
   onPremiumFeature,
@@ -934,6 +962,7 @@ function HomeDashboard({
   estimatedTotal: number;
   latestAttempt?: UserAttempt;
   selectedPart: number;
+  recommendations: ApiRecommendation[];
   onPartChange: (part: number) => void;
   onStartPractice: (part: number, count: number, adaptive?: boolean) => void;
   onPremiumFeature: (feature: FeatureKey) => void;
@@ -945,7 +974,7 @@ function HomeDashboard({
       <StudyStreakCard t={t} totalAnswered={state.skillStats.listening.totalAnswered + state.skillStats.reading.totalAnswered} />
       <SkillsBreakdownCard t={t} state={state} selectedPart={selectedPart} onPartChange={onPartChange} />
       <WeakAreasCard t={t} state={state} summary={summary} onPremiumFeature={onPremiumFeature} onUpgrade={onUpgrade} />
-      <RecommendedPracticeCard t={t} selectedPart={selectedPart} onStartPractice={onStartPractice} />
+      <RecommendedPracticeCard t={t} selectedPart={selectedPart} recommendations={recommendations} canUseAdaptive={summary.features.adaptive_learning} onStartPractice={onStartPractice} />
       <AICoachCard t={t} summary={summary} onPremiumFeature={onPremiumFeature} onUpgrade={onUpgrade} />
       <RecentTestsTable t={t} attempts={state.attempts} />
       <PremiumCard t={t} onUpgrade={onUpgrade} />
@@ -1138,29 +1167,54 @@ function WeakAreasCard({
 function RecommendedPracticeCard({
   t,
   selectedPart,
+  recommendations,
+  canUseAdaptive,
   onStartPractice,
 }: {
   t: Translation;
   selectedPart: number;
+  recommendations: ApiRecommendation[];
+  canUseAdaptive: boolean;
   onStartPractice: (part: number, count: number, adaptive?: boolean) => void;
 }) {
+  const primary = recommendations[0];
+  const fallbackTitle = `Part ${selectedPart} - ${partNames[selectedPart]}`;
+  const primaryPart = primary?.part ?? selectedPart;
+  const primaryCount = primary?.question_count ?? 10;
+  const difficultyLabel = primary
+    ? primary.severity_score >= 70
+      ? "Hard"
+      : primary.severity_score >= 45
+        ? "Medium"
+        : "Easy"
+    : "Medium";
+  const shouldUseAdaptive = Boolean(primary && canUseAdaptive);
+
   return (
     <GlassCard className="recommend-card">
       <div className="card-heading">
         <h2>{t.dashboard.recommended}</h2>
-        <span>{t.dashboard.aiReady}</span>
+        <span>{recommendations.length ? "API ready" : t.dashboard.aiReady}</span>
       </div>
       <div className="recommend-box">
-        <strong>Part {selectedPart} - {partNames[selectedPart]}</strong>
-        <p>20 {t.common.questions} · {t.dashboard.calibrated}</p>
-        <span className="difficulty medium">Medium</span>
-        <GradientButton onClick={() => onStartPractice(selectedPart, 10, false)}>
+        <strong>{primary?.title ?? fallbackTitle}</strong>
+        <p>{primary ? primary.reason : `20 ${t.common.questions} · ${t.dashboard.calibrated}`}</p>
+        <span className={`difficulty ${difficultyLabel.toLowerCase()}`}>{difficultyLabel}</span>
+        <GradientButton onClick={() => onStartPractice(primaryPart, primaryCount, shouldUseAdaptive)}>
           {t.common.startPractice} <ArrowRight size={16} />
         </GradientButton>
       </div>
-      <button className="compact-row" onClick={() => onStartPractice(5, 10, false)}>
-        Vocabulary - Email <ChevronRight size={16} />
-      </button>
+      <div className="recommendation-stack">
+        {(recommendations.length ? recommendations.slice(1, 4) : [{ title: "Vocabulary - Email", part: 5, question_count: 10, reason: "Build TOEIC business vocabulary." }]).map((item) => (
+          <button className="compact-row" key={`${item.title}-${item.part}`} onClick={() => onStartPractice(item.part, item.question_count, Boolean(canUseAdaptive && recommendations.length))}>
+            <span>
+              <strong>{item.title}</strong>
+              <small>Part {item.part} · {item.question_count} questions</small>
+            </span>
+            <ChevronRight size={16} />
+          </button>
+        ))}
+      </div>
     </GlassCard>
   );
 }
