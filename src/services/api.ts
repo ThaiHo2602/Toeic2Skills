@@ -281,6 +281,18 @@ export function mapApiAdminQuestion(question: ApiAdminQuestion): Question {
   } as Question & { answers?: Answer[] };
 }
 
+export function mapApiReviewQuestion(question: ApiQuestion): Question {
+  return {
+    ...mapApiQuestion(question),
+    explanation: question.explanation ?? "",
+    transcript: question.transcript ?? question.group?.transcript ?? undefined,
+    passageText: question.passageText ?? question.passage_text ?? question.group?.passage_text ?? undefined,
+    audioUrl: question.audioUrl ?? question.audio_url ?? question.group?.audio_url ?? undefined,
+    imageUrl: question.imageUrl ?? question.image_url ?? question.group?.image_url ?? undefined,
+    answers: question.answers?.map((answer) => mapApiAnswer(answer, question.id, true)),
+  } as Question & { answers?: Answer[] };
+}
+
 function mapApiAnswer(answer: ApiAnswer, questionId: number, includeCorrect: boolean): Answer {
   return {
     id: answer.id,
@@ -354,6 +366,7 @@ export function mapApiSubmitResponse(response: ApiSubmitAttemptResponse, fallbac
 
   return {
     ...attempt,
+    questionIds: response.review?.map((item) => item.question.id) ?? attempt.questionIds,
     answers: reviewAnswers?.length ? reviewAnswers : fallbackAnswers,
   };
 }

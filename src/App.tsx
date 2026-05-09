@@ -59,6 +59,7 @@ import {
   mapApiAttempt,
   mapApiAdminQuestion,
   mapApiQuestion,
+  mapApiReviewQuestion,
   mapApiSubmitResponse,
   mapApiUser,
   mapSubscriptionSummary,
@@ -398,6 +399,7 @@ function App() {
     if (!activeAttempt) return;
     try {
       const response = await submitAttemptApi(activeAttempt);
+      const reviewQuestions = response.review?.map((item) => mapApiReviewQuestion(item.question)) ?? [];
       const submitted = {
         ...activeAttempt,
         ...mapApiSubmitResponse(response, activeAttempt.answers),
@@ -408,6 +410,7 @@ function App() {
       };
       setState({
         ...state,
+        questions: reviewQuestions.length ? mergeQuestions(state.questions, reviewQuestions) : state.questions,
         attempts: [submitted, ...state.attempts.filter((attempt) => attempt.id !== submitted.id)],
       });
       getDashboardApi()
@@ -725,7 +728,7 @@ function App() {
 
       {view === "vocabulary" && <VocabularyScreen t={t} collection={state.vocabularyCollection} />}
 
-      {view === "progress" && <ResultsScreen t={t} state={state} summary={summary} onUpgrade={() => setView("premium")} />}
+      {view === "progress" && <ResultsScreen t={t} state={state} summary={summary} onUpgrade={() => setView("premium")} onToggleBookmark={toggleBookmark} />}
 
       {view === "premium" && (
         <PremiumScreen
@@ -1740,8 +1743,21 @@ function VocabularyScreen({ t, collection }: { t: Translation; collection: Vocab
   );
 }
 
-function ResultsScreen({ t, state, summary, onUpgrade }: { t: Translation; state: AppState; summary: ReturnType<typeof getSubscriptionSummary>; onUpgrade: () => void }) {
+function ResultsScreen({
+  t,
+  state,
+  summary,
+  onUpgrade,
+  onToggleBookmark,
+}: {
+  t: Translation;
+  state: AppState;
+  summary: ReturnType<typeof getSubscriptionSummary>;
+  onUpgrade: () => void;
+  onToggleBookmark: (questionId: number) => void;
+}) {
   const latest = state.attempts[0];
+  const [selectedIndex, setSelectedIndex] = useState(0);
   if (!latest) {
     return (
       <GlassCard className="page-hero">
@@ -1751,6 +1767,28 @@ function ResultsScreen({ t, state, summary, onUpgrade }: { t: Translation; state
       </GlassCard>
     );
   }
+
+  const questionMap = new Map(state.questions.map((question) => [question.id, question]));
+  const reviewItems = latest.questionIds
+    .map((questionId) => {
+      const question = questionMap.get(questionId);
+      if (!question) return null;
+      const questionAnswers = question.answers?.length ? question.answers : answers.filter((answer) => answer.questionId === question.id);
+      const userAnswer = latest.answers.find((answer) => answer.questionId === question.id);
+      const selectedAnswer = questionAnswers.find((answer) => answer.id === userAnswer?.selectedAnswerId);
+      const correctAnswer = questionAnswers.find((answer) => answer.isCorrect);
+      return { question, questionAnswers, userAnswer, selectedAnswer, correctAnswer };
+    })
+    .filter(Boolean) as ResultReviewItem[];
+  const activeItem = reviewItems[Math.min(selectedIndex, Math.max(0, reviewItems.length - 1))];
+  const bookmarkedIds = state.bookmarks.map((bookmark) => bookmark.questionId);
+  const lockedFeatures = latest.lockedFeatures?.length
+    ? latest.lockedFeatures
+    : [
+        { feature: "weakness_analysis" as FeatureKey, message: "Nang cap Premium de xem phan tich diem yeu." },
+        { feature: "recommendations" as FeatureKey, message: "Nang cap Premium de nhan lo trinh on tap ca nhan hoa." },
+        { feature: "ai_explanation" as FeatureKey, message: "Nang cap Premium de mo giai thich AI theo tung cau." },
+      ];
 
   return (
     <div className="results-page">
@@ -1763,14 +1801,207 @@ function ResultsScreen({ t, state, summary, onUpgrade }: { t: Translation; state
           <MetricCard label={t.results.confidence} value={`${latest.scoreConfidence ?? 0}%`} meta={t.results.scoreReliability} tone="green" />
         </div>
       </GlassCard>
-      <GlassCard className="locked-parent analysis-card">
-        <div className={summary.features.weakness_analysis ? "" : "blurred"}>
-          <h2>{t.results.weaknessAnalysis}</h2>
-          <p>{t.results.weaknessCopy}</p>
-        </div>
-        {!summary.features.weakness_analysis && <LockedFeatureOverlay title={t.locked.title} description={t.locked.description} upgradeLabel={t.common.upgrade} onUpgrade={onUpgrade} />}
-      </GlassCard>
+      <ResultReviewPanel
+        items={reviewItems}
+        activeItem={activeItem}
+        selectedIndex={selectedIndex}
+        bookmarkedIds={bookmarkedIds}
+        onSelect={setSelectedIndex}
+        onToggleBookmark={onToggleBookmark}
+      />
+      <ResultInsightsPanel t={t} state={state} summary={summary} lockedFeatures={lockedFeatures} onUpgrade={onUpgrade} />
       <RecentTestsTable t={t} attempts={state.attempts} />
+    </div>
+  );
+}
+
+type ResultReviewItem = {
+  question: Question;
+  questionAnswers: Answer[];
+  userAnswer?: {
+    questionId: number;
+    selectedAnswerId?: number;
+    isCorrect: boolean;
+    timeSpentSeconds: number;
+    answeredAt: string;
+  };
+  selectedAnswer?: Answer;
+  correctAnswer?: Answer;
+};
+
+function ResultReviewPanel({
+  items,
+  activeItem,
+  selectedIndex,
+  bookmarkedIds,
+  onSelect,
+  onToggleBookmark,
+}: {
+  items: ResultReviewItem[];
+  activeItem?: ResultReviewItem;
+  selectedIndex: number;
+  bookmarkedIds: number[];
+  onSelect: (index: number) => void;
+  onToggleBookmark: (questionId: number) => void;
+}) {
+  if (!items.length || !activeItem) {
+    return (
+      <GlassCard className="result-review-empty">
+        <h2>Review answers</h2>
+        <p>Submit an online attempt to see answer explanations, transcript, and corrected options here.</p>
+      </GlassCard>
+    );
+  }
+
+  const { question } = activeItem;
+  const isBookmarked = bookmarkedIds.includes(question.id);
+
+  return (
+    <GlassCard className="result-review-shell">
+      <div className="result-review-header">
+        <div>
+          <span className="eyebrow">Answer review</span>
+          <h2>Review question {selectedIndex + 1}/{items.length}</h2>
+        </div>
+        <GhostButton onClick={() => onToggleBookmark(question.id)}>
+          <Bookmark size={16} fill={isBookmarked ? "currentColor" : "none"} />
+          {isBookmarked ? "Saved" : "Save"}
+        </GhostButton>
+      </div>
+      <div className="result-review-grid">
+        <div className="review-question-list" aria-label="Question review list">
+          {items.map((item, index) => (
+            <button
+              className={["review-question-row", item.userAnswer?.isCorrect ? "correct" : "wrong", index === selectedIndex ? "active" : ""].filter(Boolean).join(" ")}
+              key={item.question.id}
+              onClick={() => onSelect(index)}
+            >
+              {item.userAnswer?.isCorrect ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
+              <span>
+                <strong>Q{index + 1}. Part {item.question.part}</strong>
+                <small>{item.question.questionText || partNames[item.question.part]}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="review-detail-card">
+          <div className="review-badges">
+            <span>{question.skill}</span>
+            <span>Part {question.part}</span>
+            <span>{question.difficultyLevel}</span>
+            <span>{activeItem.userAnswer?.isCorrect ? "Correct" : "Needs review"}</span>
+          </div>
+          <h3>{question.questionText || partNames[question.part]}</h3>
+          {(question.audioUrl || question.imageUrl) && (
+            <div className="review-media">
+              {question.audioUrl && (
+                <div>
+                  <span><Volume2 size={15} /> Audio</span>
+                  <audio controls src={question.audioUrl} />
+                </div>
+              )}
+              {question.imageUrl && <img src={question.imageUrl} alt="Question visual" />}
+            </div>
+          )}
+          {question.passageText && (
+            <details className="review-context" open>
+              <summary><BookOpen size={16} /> Passage</summary>
+              <p>{question.passageText}</p>
+            </details>
+          )}
+          {question.transcript && (
+            <details className="review-context">
+              <summary><Headphones size={16} /> Transcript</summary>
+              <p>{question.transcript}</p>
+            </details>
+          )}
+          <div className="review-answer-grid">
+            {activeItem.questionAnswers.map((answer) => {
+              const isSelected = answer.id === activeItem.userAnswer?.selectedAnswerId;
+              const isCorrect = answer.isCorrect;
+              const className = ["review-answer-option", isCorrect ? "correct" : "", isSelected && !isCorrect ? "wrong" : "", isSelected ? "selected" : ""].filter(Boolean).join(" ");
+              return (
+                <div className={className} key={answer.id}>
+                  <strong>{String.fromCharCode(64 + answer.displayOrder)}</strong>
+                  <span>{answer.answerText}</span>
+                  {isCorrect && <em>Correct answer</em>}
+                  {isSelected && !isCorrect && <em>Your answer</em>}
+                </div>
+              );
+            })}
+          </div>
+          <div className="review-explanation-grid">
+            <div>
+              <span className="eyebrow">Explanation</span>
+              <p>{question.explanation || "No explanation has been added for this question yet."}</p>
+            </div>
+            <div>
+              <span className="eyebrow">Your answer</span>
+              <p>{activeItem.selectedAnswer?.answerText ?? "No answer selected."}</p>
+              <span className="eyebrow">Correct answer</span>
+              <p>{activeItem.correctAnswer?.answerText ?? "Not available."}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </GlassCard>
+  );
+}
+
+function ResultInsightsPanel({
+  t,
+  state,
+  summary,
+  lockedFeatures,
+  onUpgrade,
+}: {
+  t: Translation;
+  state: AppState;
+  summary: ReturnType<typeof getSubscriptionSummary>;
+  lockedFeatures: Array<{ feature: FeatureKey; message: string }>;
+  onUpgrade: () => void;
+}) {
+  const weaknessRows = state.weaknesses.slice(0, 3);
+
+  if (summary.features.weakness_analysis) {
+    return (
+      <GlassCard className="analysis-card result-insights-card">
+        <div className="card-heading">
+          <h2>{t.results.weaknessAnalysis}</h2>
+          <Sparkles size={20} />
+        </div>
+        <p>{t.results.weaknessCopy}</p>
+        <div className="result-insight-list">
+          {weaknessRows.length ? (
+            weaknessRows.map((weakness) => (
+              <div key={weakness.id}>
+                <strong>{weaknessLabel(weakness)}</strong>
+                <span>{weakness.accuracy}% accuracy · {weakness.sampleSize} answers</span>
+              </div>
+            ))
+          ) : (
+            <div>
+              <strong>No major weakness detected</strong>
+              <span>Keep practicing to build more reliable analytics.</span>
+            </div>
+          )}
+        </div>
+      </GlassCard>
+    );
+  }
+
+  return (
+    <div className="locked-insights-grid">
+      {lockedFeatures.map((item) => (
+        <GlassCard className="locked-parent result-locked-card" key={item.feature}>
+          <div className="blurred">
+            <span className="eyebrow">{item.feature.replace(/_/g, " ")}</span>
+            <h3>{t.results.weaknessAnalysis}</h3>
+            <p>{item.message}</p>
+          </div>
+          <LockedFeatureOverlay title={t.locked.title} description={item.message} upgradeLabel={t.common.upgrade} onUpgrade={onUpgrade} />
+        </GlassCard>
+      ))}
     </div>
   );
 }
