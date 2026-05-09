@@ -95,15 +95,26 @@ export function FloatingDock({ view, onViewChange, t }: { view: AppView; onViewC
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
-              <button
-                key={item.id}
-                className={view === item.id ? "dock-item active" : "dock-item"}
-                onClick={() => navigate(item.id)}
-                aria-label={t.nav[item.labelKey]}
-              >
-                <Icon size={18} />
-                <span>{t.nav[item.labelKey]}</span>
-              </button>
+              <div className="dock-item-wrap" key={item.id}>
+                <button
+                  className={view === item.id ? "dock-item active" : "dock-item"}
+                  onClick={() => navigate(item.id)}
+                  aria-label={t.nav[item.labelKey]}
+                >
+                  <Icon size={18} />
+                  <span>{t.nav[item.labelKey]}</span>
+                </button>
+                {item.id === "admin" && view === "admin" && (
+                  <div className="admin-dock-submenu" aria-label="Admin submenu">
+                    {["Dashboard", "Question Bank", "Question Groups", "Test Sets", "Users", "Logs", "Settings"].map((label) => (
+                      <button key={label} className={label === "Question Bank" ? "active" : ""} onClick={() => navigate("admin")}>
+                        <Database size={13} />
+                        <span>{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
