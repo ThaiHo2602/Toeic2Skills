@@ -2441,6 +2441,38 @@ p {
   text-align: left;
 }
 
+.test-history-card {
+  padding: 24px;
+}
+
+.test-history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.test-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.test-history-row span {
+  font-weight: 900;
+}
+
+.test-history-row strong {
+  color: var(--primary);
+}
+
+.test-history-row small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
 .part-card {
   border: 1px solid var(--border);
   background: var(--surface);
@@ -2507,6 +2539,12 @@ p {
   border-radius: 999px;
   color: #475569;
   background: rgba(255, 255, 255, 0.66);
+}
+
+.timer-pill.danger {
+  color: var(--danger);
+  background: rgba(254, 242, 242, 0.92);
+  border-color: rgba(239, 68, 68, 0.24);
 }
 
 .practice-two-col {

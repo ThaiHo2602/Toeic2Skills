@@ -91,6 +91,7 @@ export interface UserAttempt {
   startedAt: string;
   submittedAt?: string;
   durationSeconds: number;
+  durationLimitSeconds?: number;
   questionIds: number[];
   answers: UserAnswer[];
   totalQuestions: number;

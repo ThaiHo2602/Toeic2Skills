@@ -63,7 +63,15 @@ class AttemptController extends Controller
             ],
         );
 
-        return response()->json(['success' => true, 'answer' => $userAnswer]);
+        return response()->json([
+            'success' => true,
+            'answer' => [
+                'question_id' => $userAnswer->question_id,
+                'selected_answer_id' => $userAnswer->selected_answer_id,
+                'time_spent_seconds' => $userAnswer->time_spent_seconds,
+                'answered_at' => $userAnswer->answered_at,
+            ],
+        ]);
     }
 
     public function submit(Request $request, Attempt $attempt)

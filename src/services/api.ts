@@ -168,6 +168,17 @@ export function submitAttemptApi(attempt: UserAttempt) {
   });
 }
 
+export function saveAttemptAnswerApi(attemptId: string, answer: UserAnswer) {
+  return apiRequest<{ success: true; answer: unknown }>(`/attempts/${attemptId}/answers`, {
+    method: "POST",
+    json: {
+      question_id: answer.questionId,
+      selected_answer_id: answer.selectedAnswerId ?? null,
+      time_spent_seconds: answer.timeSpentSeconds,
+    },
+  });
+}
+
 export function getAdminQuestionsApi() {
   return apiRequest<{ success: true; questions: ApiAdminQuestion[] | ApiPagination<ApiAdminQuestion> }>("/admin/questions");
 }
@@ -341,7 +352,7 @@ export function mapApiAttempt(attempt: ApiAttempt): UserAttempt {
     status: attempt.status === "expired" ? "abandoned" : attempt.status === "completed" ? "submitted" : attempt.status,
     startedAt: attempt.startedAt ?? attempt.started_at ?? new Date().toISOString(),
     submittedAt: attempt.submittedAt ?? attempt.submitted_at,
-    durationSeconds: 0,
+    durationSeconds: attempt.durationSeconds ?? attempt.duration_seconds ?? 0,
     questionIds: attempt.questionIds ?? attempt.questions?.map((question) => question.id) ?? [],
     answers: [],
     totalQuestions: attempt.totalQuestions ?? attempt.total_questions,
@@ -785,6 +796,8 @@ export interface ApiAttempt {
   estimated_total_score?: number;
   scoreConfidence?: number;
   score_confidence?: number;
+  durationSeconds?: number;
+  duration_seconds?: number;
 }
 
 export interface ApiQuestion {

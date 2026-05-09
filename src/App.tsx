@@ -65,6 +65,7 @@ import {
   mapApiUser,
   mapSubscriptionSummary,
   registerApi,
+  saveAttemptAnswerApi,
   saveBookmarkApi,
   saveVocabularyItemApi,
   setApiToken,
@@ -99,9 +100,9 @@ const partNames: Record<number, string> = {
 };
 
 const mockVocabulary = [
-  { word: "invoice", meaning: "hóa đơn", level: "Business" },
-  { word: "confirm", meaning: "xác nhận", level: "Travel" },
-  { word: "conference", meaning: "hội nghị", level: "Office" },
+  { word: "invoice", meaning: "hoa don", level: "Business" },
+  { word: "confirm", meaning: "xac nhan", level: "Travel" },
+  { word: "conference", meaning: "hoi nghi", level: "Office" },
 ];
 
 const vocabularyHints: Record<number, Array<{ word: string; meaning: string; level: string }>> = {
@@ -174,6 +175,7 @@ function App() {
   const [activeAttempt, setActiveAttempt] = useState<UserAttempt | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [revealedQuestionId, setRevealedQuestionId] = useState<number | null>(null);
+  const [isSubmittingAttempt, setIsSubmittingAttempt] = useState(false);
   const [accessModal, setAccessModal] = useState<AccessDecision | null>(null);
   const [remoteSummary, setRemoteSummary] = useState<ReturnType<typeof mapSubscriptionSummary> | null>(null);
   const [testSets, setTestSets] = useState<ApiTestSet[]>([]);
@@ -294,6 +296,7 @@ function App() {
       status: "in_progress",
       startedAt: new Date().toISOString(),
       durationSeconds: 0,
+      durationLimitSeconds: mode === "full_test" ? 120 * 60 : mode === "mini_test" ? 15 * 60 : mode === "placement" ? 12 * 60 : undefined,
       questionIds: selectedQuestions.map((question) => question.id),
       answers: [],
       totalQuestions: selectedQuestions.length,
@@ -363,11 +366,15 @@ function App() {
       const response = await startTestApi(mode, testSetId);
       const backendQuestions = response.questions.map(mapApiQuestion);
       const backendAttempt = mapApiAttempt(response.attempt);
+      const testSet = testSetId ? testSets.find((item) => item.id === testSetId) : undefined;
       setState({
         ...state,
         questions: mergeQuestions(state.questions, backendQuestions),
       });
-      setActiveAttempt(backendAttempt);
+      setActiveAttempt({
+        ...backendAttempt,
+        durationLimitSeconds: testSet?.duration_minutes ? testSet.duration_minutes * 60 : mode === "full_test" ? 120 * 60 : mode === "mini_test" ? 15 * 60 : 12 * 60,
+      });
       setCurrentIndex(0);
       setRevealedQuestionId(null);
       setView("practice");
@@ -408,6 +415,12 @@ function App() {
       },
     ];
     setActiveAttempt({ ...activeAttempt, answers: nextAnswers });
+    const selected = nextAnswers.find((item) => item.questionId === question.id);
+    if (selected && Number.isInteger(Number(activeAttempt.id))) {
+      saveAttemptAnswerApi(activeAttempt.id, selected).catch((error) => {
+        console.warn("Answer autosave unavailable; answer will still be submitted at finish.", error);
+      });
+    }
   }
 
   function submitCurrentQuestion() {
@@ -422,7 +435,8 @@ function App() {
   }
 
   async function finishAttempt() {
-    if (!activeAttempt) return;
+    if (!activeAttempt || isSubmittingAttempt || activeAttempt.status !== "in_progress") return;
+    setIsSubmittingAttempt(true);
     try {
       const response = await submitAttemptApi(activeAttempt);
       const reviewQuestions = response.review?.map((item) => mapApiReviewQuestion(item.question)) ?? [];
@@ -445,8 +459,14 @@ function App() {
       setActiveAttempt(null);
       setRevealedQuestionId(null);
       setView("progress");
+      setIsSubmittingAttempt(false);
       return;
     } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setIsSubmittingAttempt(false);
+        setAccessModal({ success: false, message: "Attempt was already submitted or is no longer in progress.", upgradeRequired: false });
+        return;
+      }
       console.warn("Backend submit API unavailable, falling back to local scoring.", error);
     }
 
@@ -454,6 +474,7 @@ function App() {
     setActiveAttempt(null);
     setRevealedQuestionId(null);
     setView("progress");
+    setIsSubmittingAttempt(false);
   }
 
   async function toggleBookmark(questionId: number) {
@@ -740,6 +761,7 @@ function App() {
           onReveal={submitCurrentQuestion}
           onNext={nextQuestion}
           onFinish={finishAttempt}
+          isSubmitting={isSubmittingAttempt}
           onBookmark={toggleBookmark}
           onSaveVocabulary={saveVocabularyFromQuestion}
         />
@@ -798,7 +820,7 @@ function AuthScreen({
   onSubmit: (payload: { mode: "login" | "register"; name?: string; email: string; password: string }) => void;
 }) {
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [name, setName] = useState("Nguyễn Văn A");
+  const [name, setName] = useState("Nguyen Van A");
   const [email, setEmail] = useState("learner@example.com");
   const [password, setPassword] = useState("Password1");
   const [formError, setFormError] = useState<string | null>(null);
@@ -1198,7 +1220,7 @@ function RecommendedPracticeCard({
       </div>
       <div className="recommend-box">
         <strong>{primary?.title ?? fallbackTitle}</strong>
-        <p>{primary ? primary.reason : `20 ${t.common.questions} · ${t.dashboard.calibrated}`}</p>
+        <p>{primary ? primary.reason : `20 ${t.common.questions} - ${t.dashboard.calibrated}`}</p>
         <span className={`difficulty ${difficultyLabel.toLowerCase()}`}>{difficultyLabel}</span>
         <GradientButton onClick={() => onStartPractice(primaryPart, primaryCount, shouldUseAdaptive)}>
           {t.common.startPractice} <ArrowRight size={16} />
@@ -1209,7 +1231,7 @@ function RecommendedPracticeCard({
           <button className="compact-row" key={`${item.title}-${item.part}`} onClick={() => onStartPractice(item.part, item.question_count, Boolean(canUseAdaptive && recommendations.length))}>
             <span>
               <strong>{item.title}</strong>
-              <small>Part {item.part} · {item.question_count} questions</small>
+              <small>Part {item.part} - {item.question_count} questions</small>
             </span>
             <ChevronRight size={16} />
           </button>
@@ -1370,6 +1392,7 @@ function PracticeScreen({
   onReveal,
   onNext,
   onFinish,
+  isSubmitting,
   onBookmark,
   onSaveVocabulary,
 }: {
@@ -1385,21 +1408,39 @@ function PracticeScreen({
   onReveal: () => void;
   onNext: () => void;
   onFinish: () => void;
+  isSubmitting: boolean;
   onBookmark: (questionId: number) => void;
   onSaveVocabulary: (question: Question, item: { word: string; meaning: string; level: string }) => void;
 }) {
+  const [now, setNow] = useState(() => Date.now());
   const question = questions.find((item) => item.id === attempt.questionIds[currentIndex]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!attempt.durationLimitSeconds) return;
+    const elapsed = Math.max(0, Math.floor((now - new Date(attempt.startedAt).getTime()) / 1000));
+    if (elapsed >= attempt.durationLimitSeconds && attempt.status === "in_progress" && !isSubmitting) {
+      onFinish();
+    }
+  }, [attempt.durationLimitSeconds, attempt.startedAt, attempt.status, isSubmitting, now, onFinish]);
+
   if (!question) return null;
   const group = question.questionGroupId ? questionGroups.find((item) => item.id === question.questionGroupId) : undefined;
   const selected = attempt.answers.find((answer) => answer.questionId === question.id);
   const revealed = revealedQuestionId === question.id;
   const isReadingPassage = question.skill === "reading" && (question.passageText || group?.passageText);
+  const elapsedSeconds = Math.max(0, Math.floor((now - new Date(attempt.startedAt).getTime()) / 1000));
+  const remainingSeconds = attempt.durationLimitSeconds ? Math.max(0, attempt.durationLimitSeconds - elapsedSeconds) : undefined;
+  const answeredCount = attempt.answers.length;
 
   return (
     <div className="practice-screen">
       <GlassCard className="practice-header">
         <div>
-          <span className="eyebrow">{t.common.part} {question.part} · {partNames[question.part]}</span>
+          <span className="eyebrow">{t.common.part} {question.part} - {partNames[question.part]}</span>
           <h1>{question.skill === "listening" ? t.practice.listeningPractice : t.practice.readingPractice}</h1>
         </div>
         <div className="practice-meta">
@@ -1409,6 +1450,12 @@ function PracticeScreen({
           </span>
           <span>
             <Clock3 size={14} /> {question.estimatedTimeSeconds}s
+          </span>
+          <span>
+            <Target size={14} /> {answeredCount}/{attempt.questionIds.length} answered
+          </span>
+          <span className={remainingSeconds !== undefined && remainingSeconds <= 60 ? "timer-pill danger" : "timer-pill"}>
+            <Clock3 size={14} /> {formatTimer(remainingSeconds ?? elapsedSeconds)}
           </span>
         </div>
         <div className="progress-track">
@@ -1454,17 +1501,24 @@ function PracticeScreen({
           <Flag size={16} /> {t.common.reportIssue}
         </GhostButton>
         {!revealed ? (
-          <GradientButton onClick={onReveal} disabled={!selected}>
+          <GradientButton onClick={onReveal} disabled={!selected || isSubmitting}>
             {t.common.submit}
           </GradientButton>
         ) : currentIndex < attempt.questionIds.length - 1 ? (
-          <GradientButton onClick={onNext}>{t.common.nextQuestion}</GradientButton>
+          <GradientButton onClick={onNext} disabled={isSubmitting}>{t.common.nextQuestion}</GradientButton>
         ) : (
-          <GradientButton onClick={onFinish}>{t.common.finishAttempt}</GradientButton>
+          <GradientButton onClick={onFinish} disabled={isSubmitting}>{isSubmitting ? "Submitting..." : t.common.finishAttempt}</GradientButton>
         )}
       </div>
     </div>
   );
+}
+
+function formatTimer(seconds: number) {
+  const safe = Math.max(0, seconds);
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${minutes}:${String(rest).padStart(2, "0")}`;
 }
 
 function PracticeQuestionCard({
@@ -1691,6 +1745,7 @@ function TestsScreen({
   onStartTest: (mode: "mini_test" | "full_test" | "placement", testSetId?: number) => void;
   onUpgrade: () => void;
 }) {
+  const [activeTab, setActiveTab] = useState<"mini" | "full" | "history">("mini");
   const remoteTests = testSets.map((testSet) => ({
     id: testSet.id,
     title: testSet.title,
@@ -1708,6 +1763,8 @@ function TestsScreen({
         { title: t.tests.fullSimulation, type: "full_test" as const, questions: state.questions.length, time: "120 min", difficulty: "hard", score: "10-990", description: null },
         { title: t.tests.placement, type: "placement" as const, questions: 14, time: "12 min", difficulty: "medium", score: t.tests.baseline, description: null },
       ];
+  const visibleTests = tests.filter((test) => (activeTab === "mini" ? test.type !== "full_test" : activeTab === "full" ? test.type === "full_test" : false));
+  const historyRows = state.attempts.filter((attempt) => attempt.status === "submitted").slice(0, 8);
   const outOfFreeTests = !summary.isPremium && summary.remainingTestsToday === 0;
 
   return (
@@ -1715,27 +1772,49 @@ function TestsScreen({
       <GlassCard className="page-hero">
         <span className="eyebrow">{t.tests.title}</span>
         <h1>{t.tests.hero}</h1>
-        <p>{t.tests.remaining}: {summary.remainingTestsToday ?? t.common.unlimited}/{summary.dailyTestLimit ?? "∞"}</p>
+        <p>{t.tests.remaining}: {summary.remainingTestsToday ?? t.common.unlimited}/{summary.dailyTestLimit ?? "unlimited"}</p>
       </GlassCard>
       <div className="tabs-row">
-        <button className="active">{t.tests.mini}</button>
-        <button>{t.tests.full}</button>
-        <button>{t.tests.history}</button>
+        <button className={activeTab === "mini" ? "active" : ""} onClick={() => setActiveTab("mini")}>{t.tests.mini}</button>
+        <button className={activeTab === "full" ? "active" : ""} onClick={() => setActiveTab("full")}>{t.tests.full}</button>
+        <button className={activeTab === "history" ? "active" : ""} onClick={() => setActiveTab("history")}>{t.tests.history}</button>
       </div>
-      <div className="test-card-grid">
-        {tests.map((test) => (
-          <GlassCard className="test-card" key={test.title}>
-            <span className={`difficulty ${test.difficulty}`}>{test.difficulty}</span>
-            <h2>{test.title}</h2>
-            {test.description && <p>{test.description}</p>}
-            <p>{test.questions} {t.common.questions} · {test.time} · {test.score}</p>
-            <GradientButton onClick={() => onStartTest(test.type, "id" in test ? test.id : undefined)} disabled={outOfFreeTests}>
-              {t.common.startTest} <ArrowRight size={16} />
-            </GradientButton>
-            {outOfFreeTests && <GhostButton onClick={onUpgrade}>{t.common.upgrade}</GhostButton>}
-          </GlassCard>
-        ))}
-      </div>
+      {activeTab !== "history" ? (
+        <div className="test-card-grid">
+          {visibleTests.map((test) => (
+            <GlassCard className="test-card" key={test.title}>
+              <span className={`difficulty ${test.difficulty}`}>{test.difficulty}</span>
+              <h2>{test.title}</h2>
+              {test.description && <p>{test.description}</p>}
+              <p>{test.questions} {t.common.questions} · {test.time} · {test.score}</p>
+              <GradientButton onClick={() => onStartTest(test.type, "id" in test ? test.id : undefined)} disabled={outOfFreeTests}>
+                {t.common.startTest} <ArrowRight size={16} />
+              </GradientButton>
+              {outOfFreeTests && <GhostButton onClick={onUpgrade}>{t.common.upgrade}</GhostButton>}
+            </GlassCard>
+          ))}
+        </div>
+      ) : (
+        <GlassCard className="test-history-card">
+          <div className="card-heading">
+            <h2>{t.tests.history}</h2>
+            <span>{historyRows.length} attempts</span>
+          </div>
+          <div className="test-history-list">
+            {historyRows.length ? (
+              historyRows.map((attempt) => (
+                <div className="test-history-row" key={attempt.id}>
+                  <span>{attempt.mode === "full_test" ? "Full Test" : attempt.mode === "mini_test" ? "Mini Test" : "Practice"}</span>
+                  <strong>{attempt.estimatedTotalScore ?? attempt.accuracy}</strong>
+                  <small>{attempt.correctCount}/{attempt.totalQuestions} correct · {attempt.submittedAt ? new Date(attempt.submittedAt).toLocaleString() : "-"}</small>
+                </div>
+              ))
+            ) : (
+              <p>No submitted tests yet.</p>
+            )}
+          </div>
+        </GlassCard>
+      )}
     </div>
   );
 }
@@ -1921,7 +2000,7 @@ function ResultReviewPanel({
           <Bookmark size={16} fill={isBookmarked ? "currentColor" : "none"} />
           {isBookmarked ? "Saved" : "Save"}
         </GhostButton>
-      </div>
+        </div>
       <div className="result-review-grid">
         <div className="review-question-list" aria-label="Question review list">
           {items.map((item, index) => (
@@ -2030,7 +2109,7 @@ function ResultInsightsPanel({
             weaknessRows.map((weakness) => (
               <div key={weakness.id}>
                 <strong>{weaknessLabel(weakness)}</strong>
-                <span>{weakness.accuracy}% accuracy · {weakness.sampleSize} answers</span>
+                <span>{weakness.accuracy}% accuracy - {weakness.sampleSize} answers</span>
               </div>
             ))
           ) : (
@@ -2065,7 +2144,7 @@ function ResultSummary({ t, attempt }: { t: Translation; attempt: UserAttempt })
     <GlassCard className="result-summary-card">
       <span className="eyebrow">{t.results.latest}</span>
       <h1>{attempt.estimatedTotalScore ?? attempt.accuracy}</h1>
-      <p>{t.results.estimatedTotal} · {attempt.accuracy}% {t.results.accuracy.toLowerCase()} · {attempt.correctCount}/{attempt.totalQuestions} correct</p>
+      <p>{t.results.estimatedTotal} - {attempt.accuracy}% {t.results.accuracy.toLowerCase()} - {attempt.correctCount}/{attempt.totalQuestions} correct</p>
       <div className="result-score-grid">
         <span>{t.common.listening} {attempt.estimatedListeningScore ?? "-"}</span>
         <span>{t.common.reading} {attempt.estimatedReadingScore ?? "-"}</span>
@@ -2101,7 +2180,7 @@ function PremiumScreen({
           <GlassCard className={plan.slug === "premium_quarterly" ? "pricing-card best" : "pricing-card"} key={plan.id}>
             {plan.slug === "premium_quarterly" && <span className="best-label">{t.premium.bestValue}</span>}
             <h2>{plan.name}</h2>
-            <strong>{plan.price === 0 ? "0" : plan.price.toLocaleString("vi-VN")}đ</strong>
+            <strong>{plan.price === 0 ? "0" : plan.price.toLocaleString("vi-VN")} VND</strong>
             <p>{plan.dailyTestLimit === null ? t.premium.unlimitedTests : `${plan.dailyTestLimit} tests/day`}</p>
             <ul>
               <li>{t.premium.aiExplanations}: {plan.hasAiFeatures ? t.common.yes : t.common.no}</li>
