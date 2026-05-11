@@ -23,6 +23,7 @@ import {
   createAdminQuestionGroupApi,
   createAdminTestSetApi,
   deleteAdminQuestionGroupApi,
+  deleteAdminTestSetApi,
   getAdminQuestionGroupsApi,
   getAdminQuestionsFilteredApi,
   getAdminTestSetsApi,
@@ -82,6 +83,7 @@ export function AdminQuestionBankPage({
   const [mobileTab, setMobileTab] = useState<AdminTab>("questions");
   const [toolsTab, setToolsTab] = useState<ToolsTab>("import");
   const [draftFromEditor, setDraftFromEditor] = useState<(Question & { answers?: Answer[] }) | null>(null);
+  const [editingTestSetId, setEditingTestSetId] = useState<number | null>(null);
 
   const [groupDraft, setGroupDraft] = useState({
     id: null as number | null,
@@ -251,10 +253,11 @@ export function AdminQuestionBankPage({
     }
 
     try {
-      const response = await createAdminTestSetApi(testSetDraft);
+      const response = editingTestSetId ? await updateAdminTestSetApi(editingTestSetId, testSetDraft) : await createAdminTestSetApi(testSetDraft);
       const refreshed = await getAdminTestSetsApi();
       onTestSetsChange(refreshed.test_sets.data);
-      setAdminNotice(`Created test set #${response.test_set.id}: ${response.test_set.title}.`);
+      setAdminNotice(`${editingTestSetId ? "Updated" : "Created"} test set #${response.test_set.id}: ${response.test_set.title}.`);
+      setEditingTestSetId(null);
     } catch (error) {
       console.warn("Create test set failed.", error);
       setAdminNotice("Could not create test set. Check selected questions and fields.");
@@ -300,6 +303,37 @@ export function AdminQuestionBankPage({
     const saved = await onUpdateQuestion(draftFromEditor);
     if (saved?.id) setSelectedId(saved.id);
     setAdminNotice("Saved question metadata and answers.");
+  }
+
+  function editTestSet(testSet: ApiTestSet) {
+    setEditingTestSetId(testSet.id);
+    setTestSetDraft({
+      title: testSet.title,
+      type: testSet.type,
+      description: testSet.description ?? "",
+      duration_minutes: testSet.duration_minutes,
+      difficulty_level: testSet.difficulty_level,
+      estimated_score_min: testSet.estimated_score_min ?? null,
+      estimated_score_max: testSet.estimated_score_max ?? null,
+      is_published: testSet.is_published,
+      question_ids: testSet.questions?.map((question) => question.id) ?? [],
+    });
+    setToolsTab("testsets");
+    setMobileTab("tools");
+    setAdminNotice(`Editing test set #${testSet.id}.`);
+  }
+
+  async function deleteTestSet(testSetId: number) {
+    try {
+      await deleteAdminTestSetApi(testSetId);
+      const refreshed = await getAdminTestSetsApi();
+      onTestSetsChange(refreshed.test_sets.data);
+      if (editingTestSetId === testSetId) setEditingTestSetId(null);
+      setAdminNotice(`Deleted test set #${testSetId}.`);
+    } catch (error) {
+      console.warn("Delete test set failed.", error);
+      setAdminNotice("Could not delete test set.");
+    }
   }
 
   return (
@@ -392,6 +426,7 @@ export function AdminQuestionBankPage({
         selectedQuestionIds={testSetDraft.question_ids}
         testSets={testSets}
         testSetDraft={testSetDraft}
+        editingTestSetId={editingTestSetId}
         groupDraft={groupDraft}
         groups={groups}
         notice={adminNotice}
@@ -399,6 +434,8 @@ export function AdminQuestionBankPage({
         onToggleQuestion={toggleDraftQuestion}
         onSaveTestSet={saveTestSet}
         onTogglePublish={togglePublishTestSet}
+        onEditTestSet={editTestSet}
+        onDeleteTestSet={deleteTestSet}
         onGroupDraftChange={setGroupDraft}
         onCreateGroup={createGroup}
         onDeleteGroup={deleteGroup}
@@ -1028,6 +1065,7 @@ function AdminToolsTabs({
   selectedQuestionIds,
   testSets,
   testSetDraft,
+  editingTestSetId,
   groupDraft,
   groups,
   notice,
@@ -1035,6 +1073,8 @@ function AdminToolsTabs({
   onToggleQuestion,
   onSaveTestSet,
   onTogglePublish,
+  onEditTestSet,
+  onDeleteTestSet,
   onGroupDraftChange,
   onCreateGroup,
   onDeleteGroup,
@@ -1049,6 +1089,7 @@ function AdminToolsTabs({
   selectedQuestionIds: number[];
   testSets: ApiTestSet[];
   testSetDraft: AdminTestSetPayload;
+  editingTestSetId: number | null;
   groupDraft: GroupDraft;
   groups: ApiQuestionGroup[];
   notice: string | null;
@@ -1056,6 +1097,8 @@ function AdminToolsTabs({
   onToggleQuestion: (questionId: number) => void;
   onSaveTestSet: () => void;
   onTogglePublish: (testSet: ApiTestSet) => void;
+  onEditTestSet: (testSet: ApiTestSet) => void;
+  onDeleteTestSet: (testSetId: number) => void;
   onGroupDraftChange: Dispatch<SetStateAction<GroupDraft>>;
   onCreateGroup: () => void;
   onDeleteGroup: (groupId: number) => void;
@@ -1077,10 +1120,13 @@ function AdminToolsTabs({
           selectedQuestionIds={selectedQuestionIds}
           testSets={testSets}
           draft={testSetDraft}
+          editingTestSetId={editingTestSetId}
           onDraftChange={onTestSetDraftChange}
           onToggleQuestion={onToggleQuestion}
           onSave={onSaveTestSet}
           onTogglePublish={onTogglePublish}
+          onEdit={onEditTestSet}
+          onDelete={onDeleteTestSet}
         />
       )}
       {activeTab === "groups" && (
@@ -1136,19 +1182,25 @@ function TestSetBuilderPanel({
   selectedQuestionIds,
   testSets,
   draft,
+  editingTestSetId,
   onDraftChange,
   onToggleQuestion,
   onSave,
   onTogglePublish,
+  onEdit,
+  onDelete,
 }: {
   questions: Question[];
   selectedQuestionIds: number[];
   testSets: ApiTestSet[];
   draft: AdminTestSetPayload;
+  editingTestSetId: number | null;
   onDraftChange: Dispatch<SetStateAction<AdminTestSetPayload>>;
   onToggleQuestion: (questionId: number) => void;
   onSave: () => void;
   onTogglePublish: (testSet: ApiTestSet) => void;
+  onEdit: (testSet: ApiTestSet) => void;
+  onDelete: (testSetId: number) => void;
 }) {
   return (
     <div className="testset-builder-layout">
@@ -1187,14 +1239,21 @@ function TestSetBuilderPanel({
           </button>
         ))}
       </div>
-      <GradientButton onClick={onSave}>Publish Test Set</GradientButton>
+      <div className="admin-tool-actions">
+        <GradientButton onClick={onSave}>{editingTestSetId ? "Update Test Set" : "Publish Test Set"}</GradientButton>
+        <span className="admin-inline-note">{editingTestSetId ? `Editing #${editingTestSetId}` : `${selectedQuestionIds.length} questions selected`}</span>
+      </div>
       <div className="tool-existing-list">
         {testSets.slice(0, 6).map((testSet) => (
           <div className="admin-v2-existing-row" key={testSet.id}>
             <span>#{testSet.id} · {testSet.type} · {testSet.duration_minutes} min</span>
             <strong>{testSet.title}</strong>
             <small>{testSet.questions_count ?? testSet.listening_question_count + testSet.reading_question_count} questions · {testSet.is_published ? "published" : "draft"}</small>
-            <GhostButton onClick={() => onTogglePublish(testSet)}>{testSet.is_published ? "Unpublish" : "Publish"}</GhostButton>
+            <div className="admin-row-actions">
+              <GhostButton onClick={() => onEdit(testSet)}>Edit</GhostButton>
+              <GhostButton onClick={() => onTogglePublish(testSet)}>{testSet.is_published ? "Unpublish" : "Publish"}</GhostButton>
+              <GhostButton onClick={() => onDelete(testSet.id)}>Delete</GhostButton>
+            </div>
           </div>
         ))}
       </div>

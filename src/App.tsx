@@ -1747,7 +1747,7 @@ function TestsScreen({
   onUpgrade: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<"mini" | "full" | "history">("mini");
-  const remoteTests = testSets.map((testSet) => ({
+  const remoteTests = testSets.filter((testSet) => testSet.is_published).map((testSet) => ({
     id: testSet.id,
     title: testSet.title,
     type: (testSet.type === "mini" ? "mini_test" : testSet.type === "full" ? "full_test" : "placement") as "mini_test" | "full_test" | "placement",

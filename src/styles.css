@@ -2151,6 +2151,13 @@ kbd {
   justify-content: flex-end;
 }
 
+.admin-inline-note {
+  align-self: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .admin-v2-existing-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
