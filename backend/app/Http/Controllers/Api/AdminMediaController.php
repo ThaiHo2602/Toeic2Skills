@@ -33,7 +33,7 @@ class AdminMediaController extends Controller
             'success' => true,
             'file' => [
                 'key' => $path,
-                'url' => Storage::disk('public')->url($path),
+                'url' => asset(Storage::disk('public')->url($path)),
                 'mimetype' => $file->getMimeType(),
                 'size' => $file->getSize(),
             ],

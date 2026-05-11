@@ -2140,6 +2140,17 @@ kbd {
   gap: 10px;
 }
 
+.admin-tool-actions,
+.admin-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-row-actions {
+  justify-content: flex-end;
+}
+
 .admin-v2-existing-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2161,7 +2172,8 @@ kbd {
   white-space: nowrap;
 }
 
-.admin-v2-existing-row .ghost-button {
+.admin-v2-existing-row > .ghost-button,
+.admin-row-actions {
   grid-row: span 3;
 }
 

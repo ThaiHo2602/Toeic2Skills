@@ -592,7 +592,7 @@ function App() {
         ...current,
         questions: current.questions.map((item) => (item.id === updated.id ? updated : item)),
       }));
-      return;
+      return updated;
     } catch (error) {
       console.warn("Admin update API unavailable, applying local update.", error);
     }
@@ -611,7 +611,7 @@ function App() {
         questions: [created, ...current.questions.filter((item) => item.id !== created.id)],
       }));
       setSelectedPart(created.part);
-      return;
+      return created;
     } catch (error) {
       console.warn("Admin create API unavailable, applying local create.", error);
     }
@@ -619,6 +619,7 @@ function App() {
       ...state,
       questions: [question, ...state.questions],
     });
+    return question;
   }
 
   async function completeAuth(payload: { mode: "login" | "register"; name?: string; email: string; password: string }) {

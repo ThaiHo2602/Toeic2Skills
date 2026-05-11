@@ -211,6 +211,14 @@ export function createAdminQuestionGroupApi(group: QuestionGroupPayload) {
   return apiRequest<{ success: true; group: ApiQuestionGroup }>("/admin/question-groups", { method: "POST", json: group });
 }
 
+export function updateAdminQuestionGroupApi(groupId: number, group: QuestionGroupPayload) {
+  return apiRequest<{ success: true; group: ApiQuestionGroup }>(`/admin/question-groups/${groupId}`, { method: "PUT", json: group });
+}
+
+export function deleteAdminQuestionGroupApi(groupId: number) {
+  return apiRequest<{ success: true }>(`/admin/question-groups/${groupId}`, { method: "DELETE" });
+}
+
 export function createAdminQuestionApi(question: Question) {
   return apiRequest<{ success: true; question: ApiAdminQuestion }>("/admin/questions", {
     method: "POST",

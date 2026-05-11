@@ -22,11 +22,13 @@ import type { Answer, AppState, Question, Skill } from "../types";
 import {
   createAdminQuestionGroupApi,
   createAdminTestSetApi,
+  deleteAdminQuestionGroupApi,
   getAdminQuestionGroupsApi,
   getAdminQuestionsFilteredApi,
   getAdminTestSetsApi,
   importAdminQuestionsApi,
   mapApiAdminQuestion,
+  updateAdminQuestionGroupApi,
   updateAdminTestSetApi,
   uploadAdminMediaApi,
 } from "../services/api";
@@ -36,6 +38,17 @@ import { GhostButton, GradientButton, GlassCard, MetricCard } from "./learning-u
 type ValidationStatus = "pass" | "warning" | "error";
 type AdminTab = "questions" | "editor" | "preview" | "tools";
 type ToolsTab = "import" | "testsets" | "groups";
+type GroupDraft = {
+  id: number | null;
+  title: string;
+  skill: Skill;
+  part: number;
+  group_type: ApiQuestionGroup["group_type"];
+  passage_text: string;
+  transcript: string;
+  audio_url: string;
+  image_url: string;
+};
 
 export function AdminQuestionBankPage({
   t,
@@ -52,8 +65,8 @@ export function AdminQuestionBankPage({
   testSets: ApiTestSet[];
   onTestSetsChange: (testSets: ApiTestSet[]) => void;
   onSelectPart: (part: number) => void;
-  onUpdateQuestion: (question: Question) => void;
-  onAddQuestion: (question: Question) => void;
+  onUpdateQuestion: (question: Question) => Question | void | Promise<Question | void>;
+  onAddQuestion: (question: Question) => Question | void | Promise<Question | void>;
   onMergeQuestions: (questions: Question[]) => void;
 }) {
   const [skill, setSkill] = useState<"all" | Skill>("all");
@@ -71,6 +84,7 @@ export function AdminQuestionBankPage({
   const [draftFromEditor, setDraftFromEditor] = useState<(Question & { answers?: Answer[] }) | null>(null);
 
   const [groupDraft, setGroupDraft] = useState({
+    id: null as number | null,
     title: "",
     skill: "reading" as Skill,
     part: 7,
@@ -136,7 +150,7 @@ export function AdminQuestionBankPage({
   const activeCount = state.questions.filter((question) => question.isActive).length;
   const avgDifficulty = Math.round(state.questions.reduce((sum, question) => sum + question.difficultyScore, 0) / Math.max(1, state.questions.length));
 
-  function addSampleQuestion() {
+  async function addSampleQuestion() {
     const nextId = Math.max(0, ...state.questions.map((question) => question.id)) + 1;
     const sample: Question = {
       id: nextId,
@@ -156,8 +170,8 @@ export function AdminQuestionBankPage({
       isActive: true,
       answers: createDefaultAnswers(nextId, "on"),
     } as Question & { answers: Answer[] };
-    onAddQuestion(sample);
-    setSelectedId(nextId);
+    const created = await onAddQuestion(sample);
+    setSelectedId(created?.id ?? nextId);
     setMobileTab("editor");
     onSelectPart(sample.part);
   }
@@ -177,19 +191,56 @@ export function AdminQuestionBankPage({
 
   async function createGroup() {
     try {
-      const response = await createAdminQuestionGroupApi({
-        ...groupDraft,
+      const payload = {
+        skill: groupDraft.skill,
+        part: groupDraft.part,
+        group_type: groupDraft.group_type,
         title: groupDraft.title || null,
         passage_text: groupDraft.passage_text || null,
         transcript: groupDraft.transcript || null,
         audio_url: groupDraft.audio_url || null,
         image_url: groupDraft.image_url || null,
+      };
+      const response = groupDraft.id ? await updateAdminQuestionGroupApi(groupDraft.id, payload) : await createAdminQuestionGroupApi(payload);
+      const refreshed = await getAdminQuestionGroupsApi();
+      setGroups(refreshed.groups);
+      setAdminNotice(`${groupDraft.id ? "Updated" : "Created"} group #${response.group.id}. Select it in the editor to attach questions.`);
+      setGroupDraft({
+        id: null,
+        title: "",
+        skill: "reading",
+        part: 7,
+        group_type: "reading_passage",
+        passage_text: "",
+        transcript: "",
+        audio_url: "",
+        image_url: "",
       });
-      setGroups((current) => [response.group, ...current]);
-      setAdminNotice(`Created group #${response.group.id}. Select it in the editor to attach questions.`);
     } catch (error) {
       console.warn("Create question group failed.", error);
       setAdminNotice("Could not create group. Check required group fields.");
+    }
+  }
+
+  async function deleteGroup(groupId: number) {
+    try {
+      await deleteAdminQuestionGroupApi(groupId);
+      setGroups((current) => current.filter((group) => group.id !== groupId));
+      setAdminNotice(`Deleted group #${groupId}.`);
+    } catch (error) {
+      console.warn("Delete question group failed.", error);
+      setAdminNotice("Could not delete group. Remove attached questions first if needed.");
+    }
+  }
+
+  async function uploadGroupMedia(file: File, key: "audio_url" | "image_url") {
+    try {
+      const response = await uploadAdminMediaApi(file);
+      setGroupDraft((current) => ({ ...current, [key]: response.file.url }));
+      setAdminNotice(`Uploaded ${response.file.mimetype} (${Math.round(response.file.size / 1024)} KB).`);
+    } catch (error) {
+      console.warn("Group media upload failed.", error);
+      setAdminNotice("Could not upload media. Use JPG/PNG/WebP image or MP3/WAV/M4A audio.");
     }
   }
 
@@ -244,9 +295,10 @@ export function AdminQuestionBankPage({
     }));
   }
 
-  function saveCurrentDraft() {
+  async function saveCurrentDraft() {
     if (!draftFromEditor) return;
-    onUpdateQuestion(draftFromEditor);
+    const saved = await onUpdateQuestion(draftFromEditor);
+    if (saved?.id) setSelectedId(saved.id);
     setAdminNotice("Saved question metadata and answers.");
   }
 
@@ -316,8 +368,9 @@ export function AdminQuestionBankPage({
           groups={groups}
           validation={validation}
           onDraftChange={setDraftFromEditor}
-          onSave={(question) => {
-            onUpdateQuestion(question);
+          onSave={async (question) => {
+            const saved = await onUpdateQuestion(question);
+            if (saved?.id) setSelectedId(saved.id);
             setAdminNotice("Saved question metadata and answers.");
           }}
         />
@@ -348,6 +401,21 @@ export function AdminQuestionBankPage({
         onTogglePublish={togglePublishTestSet}
         onGroupDraftChange={setGroupDraft}
         onCreateGroup={createGroup}
+        onDeleteGroup={deleteGroup}
+        onEditGroup={(group) =>
+          setGroupDraft({
+            id: group.id,
+            title: group.title ?? "",
+            skill: group.skill,
+            part: group.part,
+            group_type: group.group_type,
+            passage_text: group.passage_text ?? "",
+            transcript: group.transcript ?? "",
+            audio_url: group.audio_url ?? "",
+            image_url: group.image_url ?? "",
+          })
+        }
+        onUploadGroupMedia={uploadGroupMedia}
       />
     </div>
   );
@@ -969,6 +1037,9 @@ function AdminToolsTabs({
   onTogglePublish,
   onGroupDraftChange,
   onCreateGroup,
+  onDeleteGroup,
+  onEditGroup,
+  onUploadGroupMedia,
 }: {
   activeTab: ToolsTab;
   visible: boolean;
@@ -978,15 +1049,18 @@ function AdminToolsTabs({
   selectedQuestionIds: number[];
   testSets: ApiTestSet[];
   testSetDraft: AdminTestSetPayload;
-  groupDraft: { title: string; skill: Skill; part: number; group_type: ApiQuestionGroup["group_type"]; passage_text: string; transcript: string; audio_url: string; image_url: string };
+  groupDraft: GroupDraft;
   groups: ApiQuestionGroup[];
   notice: string | null;
   onTestSetDraftChange: Dispatch<SetStateAction<AdminTestSetPayload>>;
   onToggleQuestion: (questionId: number) => void;
   onSaveTestSet: () => void;
   onTogglePublish: (testSet: ApiTestSet) => void;
-  onGroupDraftChange: Dispatch<SetStateAction<{ title: string; skill: Skill; part: number; group_type: ApiQuestionGroup["group_type"]; passage_text: string; transcript: string; audio_url: string; image_url: string }>>;
+  onGroupDraftChange: Dispatch<SetStateAction<GroupDraft>>;
   onCreateGroup: () => void;
+  onDeleteGroup: (groupId: number) => void;
+  onEditGroup: (group: ApiQuestionGroup) => void;
+  onUploadGroupMedia: (file: File, key: "audio_url" | "image_url") => void;
 }) {
   return (
     <GlassCard className={`admin-tools-tabs admin-mobile-panel ${visible ? "mobile-active" : ""}`}>
@@ -1009,7 +1083,17 @@ function AdminToolsTabs({
           onTogglePublish={onTogglePublish}
         />
       )}
-      {activeTab === "groups" && <QuestionGroupsPanel draft={groupDraft} groups={groups} onDraftChange={onGroupDraftChange} onCreate={onCreateGroup} />}
+      {activeTab === "groups" && (
+        <QuestionGroupsPanel
+          draft={groupDraft}
+          groups={groups}
+          onDraftChange={onGroupDraftChange}
+          onCreate={onCreateGroup}
+          onDelete={onDeleteGroup}
+          onEdit={onEditGroup}
+          onUploadMedia={onUploadGroupMedia}
+        />
+      )}
     </GlassCard>
   );
 }
@@ -1123,11 +1207,17 @@ function QuestionGroupsPanel({
   groups,
   onDraftChange,
   onCreate,
+  onDelete,
+  onEdit,
+  onUploadMedia,
 }: {
-  draft: { title: string; skill: Skill; part: number; group_type: ApiQuestionGroup["group_type"]; passage_text: string; transcript: string; audio_url: string; image_url: string };
+  draft: GroupDraft;
   groups: ApiQuestionGroup[];
-  onDraftChange: Dispatch<SetStateAction<{ title: string; skill: Skill; part: number; group_type: ApiQuestionGroup["group_type"]; passage_text: string; transcript: string; audio_url: string; image_url: string }>>;
+  onDraftChange: Dispatch<SetStateAction<GroupDraft>>;
   onCreate: () => void;
+  onDelete: (groupId: number) => void;
+  onEdit: (group: ApiQuestionGroup) => void;
+  onUploadMedia: (file: File, key: "audio_url" | "image_url") => void;
 }) {
   return (
     <div className="groups-panel-layout">
@@ -1151,13 +1241,56 @@ function QuestionGroupsPanel({
       </div>
       <FormField label="Shared passage"><textarea value={draft.passage_text} onChange={(event) => onDraftChange((current) => ({ ...current, passage_text: event.target.value }))} /></FormField>
       <FormField label="Shared transcript"><textarea value={draft.transcript} onChange={(event) => onDraftChange((current) => ({ ...current, transcript: event.target.value }))} /></FormField>
-      <GradientButton onClick={onCreate}>Create Group</GradientButton>
+      <div className="admin-v2-form-grid">
+        <FormField label="Image URL">
+          <input value={draft.image_url} onChange={(event) => onDraftChange((current) => ({ ...current, image_url: event.target.value }))} />
+          <label className="upload-dropzone">
+            <Image size={18} />
+            <span>Upload group image</span>
+            <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => event.target.files?.[0] && onUploadMedia(event.target.files[0], "image_url")} />
+          </label>
+        </FormField>
+        <FormField label="Audio URL">
+          <input value={draft.audio_url} onChange={(event) => onDraftChange((current) => ({ ...current, audio_url: event.target.value }))} />
+          <label className="upload-dropzone">
+            <Volume2 size={18} />
+            <span>Upload group audio</span>
+            <input type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/x-m4a" onChange={(event) => event.target.files?.[0] && onUploadMedia(event.target.files[0], "audio_url")} />
+          </label>
+        </FormField>
+      </div>
+      <div className="admin-tool-actions">
+        <GradientButton onClick={onCreate}>{draft.id ? "Update Group" : "Create Group"}</GradientButton>
+        {draft.id && (
+          <GhostButton
+            onClick={() =>
+              onDraftChange({
+                id: null,
+                title: "",
+                skill: "reading",
+                part: 7,
+                group_type: "reading_passage",
+                passage_text: "",
+                transcript: "",
+                audio_url: "",
+                image_url: "",
+              })
+            }
+          >
+            Cancel edit
+          </GhostButton>
+        )}
+      </div>
       <div className="tool-existing-list">
         {groups.slice(0, 8).map((group) => (
           <div className="admin-v2-existing-row" key={group.id}>
             <span>#{group.id} · {group.skill} · Part {group.part}</span>
             <strong>{group.title || group.group_type}</strong>
             <small>{group.questions_count ?? 0} questions</small>
+            <div className="admin-row-actions">
+              <GhostButton onClick={() => onEdit(group)}>Edit</GhostButton>
+              <GhostButton onClick={() => onDelete(group.id)}>Delete</GhostButton>
+            </div>
           </div>
         ))}
       </div>
